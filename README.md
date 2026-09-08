@@ -40,7 +40,7 @@ Instead of a single prompt-in, text-out pipeline, Clawbit is built around **Lang
 Think of it less like a chatbot, and more like a tiny digital creature with three senses:
 
 <div align="center">
-<img src=".github/assets/senses.svg" alt="Clawbit three-sense field scan" width="100%"/>
+<img src=".github/senses.svg" alt="Clawbit three-sense field scan" width="100%"/>
 </div>
 
 <br/>
