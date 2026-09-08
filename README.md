@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src=".github/assets/banner.svg" alt="Clawbit" width="100%" />
+<img src="banner.svg" alt="Clawbit" width="100%" />
 
 <br/>
 
@@ -40,7 +40,7 @@ Instead of a single prompt-in, text-out pipeline, Clawbit is built around **Lang
 Think of it less like a chatbot, and more like a tiny digital creature with three senses:
 
 <div align="center">
-<img src=".github/senses.svg" alt="Clawbit three-sense field scan" width="100%"/>
+<img src="senses.svg" alt="Clawbit three-sense field scan" width="100%"/>
 </div>
 
 <br/>
