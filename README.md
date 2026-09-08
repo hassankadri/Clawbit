@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="banner.svg" alt="Clawbit" width="100%" />
+<img src="banner (1).svg" alt="Clawbit" width="100%" />
 
 <br/>
 
