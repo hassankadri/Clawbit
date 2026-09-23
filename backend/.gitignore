@@ -234,9 +234,3 @@ uploads/
 # =========================
 
 .abstra/
-# Temporary Git backups
-backend-git-backup/
-frontend-git-backup/
-
-# TypeScript build cache
-*.tsbuildinfo
