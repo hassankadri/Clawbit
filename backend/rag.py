@@ -24,10 +24,13 @@ import docx2txt
 from pypdf import PdfReader
 
 
-UPLOAD_ROOT = Path("uploads")
-CHROMA_ROOT = Path("chroma_db")
-UPLOAD_ROOT.mkdir(exist_ok=True)
-CHROMA_ROOT.mkdir(exist_ok=True)
+BACKEND_DIR = Path(__file__).resolve().parent
+
+UPLOAD_ROOT = BACKEND_DIR / "uploads"
+CHROMA_ROOT = BACKEND_DIR / "chroma_db"
+
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+CHROMA_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Embeddings model
 embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
@@ -271,28 +274,106 @@ def build_attachment_context(thread_id: str, attachment_ids: list[str] | None = 
     return "\n".join(parts)
 
 
-def retrieve_from_rag(query: str, thread_id: str, attachment_ids: list[str] | None = None, k: int = 4) -> str:
+def retrieve_from_rag(
+    query: str,
+    thread_id: str,
+    attachment_ids: list[str] | None = None,
+    k: int = 4,
+) -> str:
+    records = get_attachment_records(thread_id, attachment_ids)
+
+    document_attachment_ids = [
+        record["attachment_id"]
+        for record in records
+        if record.get("kind") == "document" and record.get("attachment_id")
+    ]
+
     try:
-        docs = vectorstore.similarity_search(
-            query,
-            k=max(k * 4, 12),
-            filter={"thread_id": thread_id}
-        )
+        if attachment_ids and not document_attachment_ids:
+            docs = []
+        else:
+            search_filter = {"thread_id": thread_id}
+
+            if document_attachment_ids:
+                if len(document_attachment_ids) == 1:
+                    attachment_filter = document_attachment_ids[0]
+                else:
+                    attachment_filter = {"$in": document_attachment_ids}
+
+                search_filter = {
+                    "$and": [
+                        {"thread_id": thread_id},
+                        {"attachment_id": attachment_filter},
+                    ]
+                }
+
+            docs = vectorstore.similarity_search(
+                query,
+                k=max(k * 4, 12),
+                filter=search_filter,
+            )
     except Exception:
         docs = []
 
-    if attachment_ids:
-        attachment_id_set = set(attachment_ids)
-        docs = [
-            doc
-            for doc in docs
-            if doc.metadata.get("attachment_id") in attachment_id_set
-        ]
+    unique_docs = []
+    seen_chunks = set()
 
-    docs = docs[:k]
+    for doc in docs:
+        chunk_key = (
+            doc.metadata.get("attachment_id"),
+            doc.metadata.get("page"),
+            doc.page_content,
+        )
 
-    if not docs:
-        records = get_attachment_records(thread_id, attachment_ids)
+        if chunk_key in seen_chunks:
+            continue
+
+        seen_chunks.add(chunk_key)
+        unique_docs.append(doc)
+
+    selected_docs = []
+    selected_keys = set()
+    seen_attachments = set()
+
+    # First pass: prefer one relevant chunk from each document.
+    for doc in unique_docs:
+        attachment_id = doc.metadata.get("attachment_id")
+
+        if attachment_id in seen_attachments:
+            continue
+
+        selected_docs.append(doc)
+        selected_keys.add(
+            (
+                attachment_id,
+                doc.metadata.get("page"),
+                doc.page_content,
+            )
+        )
+        seen_attachments.add(attachment_id)
+
+        if len(selected_docs) >= k:
+            break
+
+    # Second pass: fill remaining slots with the next best chunks.
+    if len(selected_docs) < k:
+        for doc in unique_docs:
+            chunk_key = (
+                doc.metadata.get("attachment_id"),
+                doc.metadata.get("page"),
+                doc.page_content,
+            )
+
+            if chunk_key in selected_keys:
+                continue
+
+            selected_docs.append(doc)
+            selected_keys.add(chunk_key)
+
+            if len(selected_docs) >= k:
+                break
+
+    if not selected_docs:
         previews = [
             f"[Source {index}: {record.get('name', 'uploaded document')}]\n{record.get('preview')}"
             for index, record in enumerate(records, start=1)
@@ -306,7 +387,7 @@ def retrieve_from_rag(query: str, thread_id: str, attachment_ids: list[str] | No
 
     results = []
 
-    for i, doc in enumerate(docs, start=1):
+    for i, doc in enumerate(selected_docs, start=1):
         source = doc.metadata.get("source", "uploaded document")
         page = doc.metadata.get("page")
 
@@ -318,4 +399,5 @@ def retrieve_from_rag(query: str, thread_id: str, attachment_ids: list[str] | No
         results.append(
             f"[Source {i}: {source_label}]\n{doc.page_content}"
         )
+
     return "\n\n".join(results)

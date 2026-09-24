@@ -192,7 +192,7 @@ async def upload_attachment(
             detail="Unsupported file type. Upload PDF, DOCX, TXT, MD, CSV, or images.",
         )
 
-    upload_dir = Path("uploads") / thread_id
+    upload_dir = Path(__file__).resolve().parent / "uploads" / thread_id
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = Path(file.filename or "upload").name
