@@ -2,6 +2,7 @@ import math
 from dotenv import load_dotenv
 from langchain_core.tools import tool
 from langchain_tavily import TavilySearch
+from langgraph.prebuilt import ToolRuntime
 from database import save_memory, search_memory
 from rag import retrieve_from_rag
 from datetime import datetime
@@ -10,15 +11,13 @@ from bs4 import BeautifulSoup
 
 load_dotenv()
 
-CURRENT_THREAD_ID = "default"
-CURRENT_ATTACHMENT_IDS: list[str] = []
+def _get_request_context(runtime: ToolRuntime) -> tuple[str, list[str]]:
+    configurable = runtime.config.get("configurable", {})
 
-def set_current_request_context(thread_id: str, attachment_ids: list[str] | None = None):
-    global CURRENT_THREAD_ID
-    global CURRENT_ATTACHMENT_IDS
-    CURRENT_THREAD_ID = thread_id
-    CURRENT_ATTACHMENT_IDS = attachment_ids or []
+    thread_id = configurable.get("thread_id", "default")
+    attachment_ids = configurable.get("attachment_ids", [])
 
+    return thread_id, attachment_ids
 
 web_search = TavilySearch(
     max_results=5,
@@ -67,41 +66,44 @@ def calculator(expression: str) -> str:
 
 
 @tool
-def search_uploaded_documents(query: str) -> str:
+def search_uploaded_documents(query: str, runtime: ToolRuntime) -> str:
     """
     Search uploaded documents for relevant information.
     Use this when the user asks about uploaded PDFs, DOCX, TXT, notes, files, or documents.
     """
+    thread_id, attachment_ids = _get_request_context(runtime)
 
     return retrieve_from_rag(
         query=query,
-        thread_id=CURRENT_THREAD_ID,
-        attachment_ids=CURRENT_ATTACHMENT_IDS or None
+        thread_id=thread_id,
+        attachment_ids=attachment_ids or None
     )
 
 
 @tool
-def remember_this(memory: str) -> str:
+def remember_this(memory: str, runtime: ToolRuntime) -> str:
     """
     Save an important user preference or fact into long-term memory.
     Use this when the user asks you to remember something.
     """
+    thread_id, _ = _get_request_context(runtime)
 
     return save_memory(
-        thread_id=CURRENT_THREAD_ID,
+        thread_id=thread_id,
         memory=memory
     )
 
 
 
 @tool
-def recall_memory(query: str) -> str:
+def recall_memory(query: str, runtime: ToolRuntime) -> str:
     """
     Recall saved long-term memories about the user or this conversation.
     """
+    thread_id, _ = _get_request_context(runtime)
 
     return search_memory(
-        thread_id=CURRENT_THREAD_ID,
+        thread_id=thread_id,
         query=query
     )
 

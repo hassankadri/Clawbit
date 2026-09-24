@@ -14,7 +14,6 @@ from rag import (
     SUPPORTED_DOCUMENT_SUFFIXES,
     SUPPORTED_IMAGE_SUFFIXES,
 )
-from tool import set_current_request_context
 
 SUPPORTED_UPLOAD_SUFFIXES = SUPPORTED_DOCUMENT_SUFFIXES | SUPPORTED_IMAGE_SUFFIXES
 UPLOAD_SUFFIX_BY_MIME = {
@@ -230,8 +229,6 @@ async def chat(req: ChatRequest):
     attachment_ids = req.attachment_ids or []
 
     attachments = get_attachment_records(thread_id, attachment_ids)
-    set_current_request_context(thread_id, attachment_ids)
-
     if attachments and any(
         attachment.get("kind") == "image" for attachment in attachments
     ) and not _is_vision_model(req.model):
@@ -239,7 +236,6 @@ async def chat(req: ChatRequest):
             response="The selected model does not support image understanding. Please choose a vision-capable model.",
             thread_id=thread_id,
         )
-
     agent = get_agent(req.model)
     print("Agent loaded successfully")
 
@@ -248,7 +244,6 @@ async def chat(req: ChatRequest):
         "role": "user",
         "content": _build_user_message(req.message, attachments, req.model),
     }
-
     result = agent.invoke(
         {
             "messages": [user_message],
@@ -256,10 +251,10 @@ async def chat(req: ChatRequest):
         config={
             "configurable": {
                 "thread_id": thread_id,
+                "attachment_ids": attachment_ids,
             }
         },
     )
-
     if isinstance(result, dict):
         messages = result.get("messages", [])
 
