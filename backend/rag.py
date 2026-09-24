@@ -181,36 +181,73 @@ def read_file_text(file_path: str) -> str:
 
 
 
-def add_document_to_rag(file_path: str, thread_id: str, attachment_id: str | None = None, source: str | None = None):
-    text = read_file_text(file_path)
-
-    if not text.strip():
-        raise ValueError("No text could be extracted from this file.")
+def add_document_to_rag(
+    file_path: str,
+    thread_id: str,
+    attachment_id: str | None = None,
+    source: str | None = None,
+):
+    path = Path(file_path)
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=900,
         chunk_overlap=150
     )
 
-    chunks = splitter.split_text(text)
+    docs: List[Document] = []
 
-    docs: List[Document] = [
-        Document(
-            page_content=chunk,
-            metadata={
-                "thread_id": thread_id,
-                "attachment_id": attachment_id or Path(file_path).name,
-                "source": source or Path(file_path).name
-            }
-        )
-        for chunk in chunks
-    ]
+    if path.suffix.lower() == ".pdf":
+        reader = PdfReader(file_path)
+
+        for page_number, page in enumerate(reader.pages, start=1):
+            page_text = page.extract_text() or ""
+
+            if not page_text.strip():
+                continue
+
+            chunks = splitter.split_text(page_text)
+
+            for chunk in chunks:
+                docs.append(
+                    Document(
+                        page_content=chunk,
+                        metadata={
+                            "thread_id": thread_id,
+                            "attachment_id": attachment_id or path.name,
+                            "source": source or path.name,
+                            "page": page_number,
+                        },
+                    )
+                )
+
+    else:
+        text = read_file_text(file_path)
+
+        if not text.strip():
+            raise ValueError("No text could be extracted from this file.")
+
+        chunks = splitter.split_text(text)
+
+        for chunk in chunks:
+            docs.append(
+                Document(
+                    page_content=chunk,
+                    metadata={
+                        "thread_id": thread_id,
+                        "attachment_id": attachment_id or path.name,
+                        "source": source or path.name,
+                    },
+                )
+            )
+
+    if not docs:
+        raise ValueError("No text could be extracted from this file.")
 
     vectorstore.add_documents(docs)
 
     return {
-        "filename": Path(file_path).name,
-        "chunks": len(docs)
+        "filename": path.name,
+        "chunks": len(docs),
     }
 
 
@@ -270,8 +307,14 @@ def retrieve_from_rag(query: str, thread_id: str, attachment_ids: list[str] | No
 
     for i, doc in enumerate(docs, start=1):
         source = doc.metadata.get("source", "uploaded document")
-        results.append(
-            f"[Source {i}: {source}]\n{doc.page_content}"
-        )
+        page = doc.metadata.get("page")
 
+        if page:
+            source_label = f"{source} - Page {page}"
+        else:
+            source_label = source
+
+        results.append(
+            f"[Source {i}: {source_label}]\n{doc.page_content}"
+        )
     return "\n\n".join(results)
