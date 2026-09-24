@@ -5,6 +5,7 @@ from langchain_tavily import TavilySearch
 from langgraph.prebuilt import ToolRuntime
 from database import save_memory, search_memory
 from rag import retrieve_from_rag
+from models import build_chat_model, normalize_model_name
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
@@ -66,6 +67,62 @@ def calculator(expression: str) -> str:
     except Exception as e:
         return f"Calculation error: {str(e)}"
 
+def _rewrite_document_query(query: str, runtime: ToolRuntime) -> str:
+    configurable = runtime.config.get("configurable", {})
+    model_name = normalize_model_name(configurable.get("model"))
+
+    messages = runtime.state.get("messages", [])
+
+    conversation_parts = []
+
+    for message in messages[-6:]:
+        message_type = getattr(message, "type", "")
+        content = getattr(message, "content", "")
+
+        if message_type not in {"human", "ai"}:
+            continue
+
+        if not isinstance(content, str) or not content.strip():
+            continue
+
+        role = "User" if message_type == "human" else "Assistant"
+        conversation_parts.append(f"{role}: {content}")
+
+    conversation = "\n".join(conversation_parts)
+
+    prompt = f"""
+Rewrite the user's document search query so it can be understood without needing the previous conversation.
+
+Rules:
+- Return only the rewritten search query.
+- Do not answer the question.
+- Preserve exact names, codes, IDs, technical terms, numbers, and filenames.
+- Use conversation context only when needed.
+- If the query is already clear and standalone, return it unchanged.
+
+Conversation:
+{conversation}
+
+Current search query:
+{query}
+"""
+
+    try:
+        model = build_chat_model(
+            model_name,
+            temperature=0.0,
+        )
+
+        response = model.invoke(prompt)
+        rewritten_query = getattr(response, "content", "")
+
+        if isinstance(rewritten_query, str) and rewritten_query.strip():
+            return rewritten_query.strip()
+
+    except Exception:
+        pass
+
+    return query
 
 @tool
 def search_uploaded_documents(query: str, runtime: ToolRuntime) -> str:
@@ -75,10 +132,15 @@ def search_uploaded_documents(query: str, runtime: ToolRuntime) -> str:
     """
     thread_id, attachment_ids = _get_request_context(runtime)
 
+    rewritten_query = _rewrite_document_query(
+        query,
+        runtime,
+    )
+
     return retrieve_from_rag(
-        query=query,
+        query=rewritten_query,
         thread_id=thread_id,
-        attachment_ids=attachment_ids or None
+        attachment_ids=attachment_ids or None,
     )
 
 

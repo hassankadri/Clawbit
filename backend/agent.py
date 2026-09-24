@@ -26,8 +26,7 @@ os.environ["LANGCHAIN_TRACING_V2"] = "false"
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUEST_CA_BUNDLE"] = certifi.where()
 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
+from models import build_chat_model, normalize_model_name
 from langchain_core.messages import SystemMessage
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -35,27 +34,6 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from tool import tools
 
 Path("data").mkdir(exist_ok=True)
-
-
-# Update default and allowed models
-DEFAULT_MODEL = "gemini-3.1-flash-lite"
-
-MODEL_CONFIGS = {
-    "gemini-3.1-flash-lite": {
-        "provider": "google",
-        "model": "gemini-3.1-flash-lite",
-    },
-    "gemini-3.5-flash": {
-        "provider": "google",
-        "model": "gemini-3.5-flash",
-    },
-    "openai/gpt-oss-20b": {
-        "provider": "groq",
-        "model": "openai/gpt-oss-20b",
-    },
-}
-
-ALLOWED_MODELS = set(MODEL_CONFIGS)
 
 SYSTEM_PROMPT = """
 You are Clawbit, an intelligent, reliable, and agentic AI assistant.
@@ -343,47 +321,6 @@ Your objective is not simply to answer questions.
 
 Your objective is to help the user accomplish their goal as accurately, efficiently, and reliably as possible while making intelligent use of the tools available to you.
 """
-
-
-
-def normalize_model_name(model_name: str | None) -> str:
-    if not model_name:
-        return DEFAULT_MODEL
-
-    model_name = model_name.strip().lower()
-
-    aliases = {
-        "gemini-latest": "gemini-3.1-flash-lite",
-        "gemini 3.1 flash lite": "gemini-3.1-flash-lite",
-        "gemini 3.5 flash": "gemini-3.5-flash",
-    }
-
-    model_name = aliases.get(model_name, model_name)
-
-    if model_name not in ALLOWED_MODELS:
-        return DEFAULT_MODEL
-
-    return model_name
-
-
-def build_chat_model(model_name: str):
-    config = MODEL_CONFIGS[model_name]
-
-    if config["provider"] == "google":
-        return ChatGoogleGenerativeAI(
-            model=config["model"],
-            temperature=0.3,
-            streaming=False,
-        )
-
-    if config["provider"] == "groq":
-        return ChatGroq(
-            model=config["model"],
-            temperature=0.3,
-            streaming=False,
-        )
-
-    raise ValueError(f"Unsupported model provider: {config['provider']}")
 
 
 def build_agent(model_name: str):

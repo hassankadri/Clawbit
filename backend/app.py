@@ -252,6 +252,7 @@ async def chat(req: ChatRequest):
             "configurable": {
                 "thread_id": thread_id,
                 "attachment_ids": attachment_ids,
+                "model": req.model,
             }
         },
     )
