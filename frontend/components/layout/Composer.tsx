@@ -740,7 +740,7 @@ export default function Composer({
                   <div className="px-3 py-2">
                     <p className="text-[14px] font-semibold">Choose model</p>
                     <p className={cn("text-[13px]", theme === "dark" ? "text-zinc-400" : "text-slate-600")}>
-                      Free Gemini models only for now.
+                      Choose between available Gemini and Groq models.
                     </p>
                   </div>
 
