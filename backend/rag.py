@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 import os
 import certifi
 from rank_bm25 import BM25Okapi
+from flashrank import Ranker, RerankRequest
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(ENV_PATH)
@@ -374,6 +375,55 @@ def _merge_hybrid_results(
         for key in ranked_keys[:limit]
     ]
 
+_RERANKER = None
+
+
+def _get_reranker() -> Ranker:
+    global _RERANKER
+
+    if _RERANKER is None:
+        cache_dir = BACKEND_DIR / "data" / "flashrank"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        _RERANKER = Ranker(
+            cache_dir=str(cache_dir),
+        )
+
+    return _RERANKER
+
+
+def _rerank_documents(
+    query: str,
+    docs: list[Document],
+    limit: int = 4,
+) -> list[Document]:
+    if not docs:
+        return []
+
+    passages = [
+        {
+            "id": str(index),
+            "text": doc.page_content,
+            "meta": {},
+        }
+        for index, doc in enumerate(docs)
+    ]
+
+    request = RerankRequest(
+        query=query,
+        passages=passages,
+    )
+
+    ranked_results = _get_reranker().rerank(request)
+
+    reranked_docs = []
+
+    for result in ranked_results[:limit]:
+        index = int(result["id"])
+        reranked_docs.append(docs[index])
+
+    return reranked_docs
+
 def retrieve_from_rag(
     query: str,
     thread_id: str,
@@ -447,6 +497,15 @@ def retrieve_from_rag(
 
         seen_chunks.add(chunk_key)
         unique_docs.append(doc)
+
+    try:
+            unique_docs = _rerank_documents(
+        query,
+        unique_docs,
+        limit=max(k * 4, 12),
+    )
+    except Exception:
+        pass
 
     selected_docs = []
     selected_keys = set()
