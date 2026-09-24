@@ -31,7 +31,7 @@ from langchain_core.messages import SystemMessage
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.sqlite import SqliteSaver
-from tool import tools
+from tool import tools, research_tools
 
 Path("data").mkdir(exist_ok=True)
 
@@ -323,23 +323,84 @@ Your objective is to help the user accomplish their goal as accurately, efficien
 """
 
 
-def build_agent(model_name: str):
+RESEARCH_MODE_PROMPT = """
+You are Clawbit operating in Research Mode.
+
+Research the user's request before answering when current or external information is needed.
+
+Rules:
+- Use available tools to gather evidence.
+- Use multiple searches when the question has multiple parts.
+- Use uploaded documents when relevant.
+- Check important facts against more than one source when useful.
+- Prefer current and reliable information.
+- Do not invent facts, sources, or tool results.
+- If sources disagree, mention the disagreement.
+- Give a clear, structured final answer.
+- Do not expose private chain-of-thought or hidden reasoning.
+"""
+
+
+def normalize_agent_mode(mode: str | None) -> str:
+    if not mode:
+        return "normal"
+
+    mode = mode.strip().lower()
+
+    if mode not in {"normal", "research"}:
+        return "normal"
+
+    return mode
+
+
+def build_agent(model_name: str, mode: str = "normal"):
     """
-    Build one LangGraph agent for the selected model.
+    Build one LangGraph agent for the selected model and mode.
     """
 
     selected_model = normalize_model_name(model_name)
+    selected_mode = normalize_agent_mode(mode)
 
-    llm = build_chat_model(selected_model)
+    research_max_tokens = (
+        1200
+        if selected_mode == "research"
+        and selected_model == "openai/gpt-oss-20b"
+        else None
+    )
 
-    llm_with_tools = llm.bind_tools(tools)
+    llm = build_chat_model(
+        selected_model,
+        max_tokens=research_max_tokens,
+    )
+
+    active_tools = (
+        research_tools
+        if selected_mode == "research"
+        else tools
+    )
+
+    llm_with_tools = llm.bind_tools(active_tools)
 
     def chatbot_node(state: MessagesState):
-        messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
+        if selected_mode == "research":
+            system_prompt = RESEARCH_MODE_PROMPT
+        else:
+            system_prompt = SYSTEM_PROMPT
+
+        conversation_messages = state["messages"]
+
+        if selected_mode == "research":
+            conversation_messages = conversation_messages[-8:]
+
+        messages = [
+            SystemMessage(content=system_prompt)
+        ] + conversation_messages
+
         response = llm_with_tools.invoke(messages)
+
         return {"messages": [response]}
 
-    tool_node = ToolNode(tools)
+    tool_node = ToolNode(active_tools)
 
     workflow = StateGraph(MessagesState)
 
@@ -363,15 +424,27 @@ def build_agent(model_name: str):
 _AGENT_CACHE = {}
 
 
-def get_agent(model_name: str | None = None):
+def get_agent(
+    model_name: str | None = None,
+    mode: str = "normal",
+):
     """
-    Return cached LangGraph agent for selected model.
+    Return cached LangGraph agent for the selected model and mode.
     If not created yet, create it once and reuse it.
     """
 
     selected_model = normalize_model_name(model_name)
+    selected_mode = normalize_agent_mode(mode)
 
-    if selected_model not in _AGENT_CACHE:
-        _AGENT_CACHE[selected_model] = build_agent(selected_model)
+    cache_key = (
+        selected_model,
+        selected_mode,
+    )
 
-    return _AGENT_CACHE[selected_model]
+    if cache_key not in _AGENT_CACHE:
+        _AGENT_CACHE[cache_key] = build_agent(
+            selected_model,
+            selected_mode,
+        )
+
+    return _AGENT_CACHE[cache_key]

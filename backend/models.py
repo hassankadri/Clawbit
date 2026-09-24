@@ -52,6 +52,7 @@ def normalize_model_name(model_name: str | None) -> str:
 def build_chat_model(
     model_name: str,
     temperature: float = 0.3,
+    max_tokens: int | None = None,
 ):
     config = MODEL_CONFIGS[model_name]
 
@@ -63,11 +64,16 @@ def build_chat_model(
         )
 
     if config["provider"] == "groq":
-        return ChatGroq(
-            model=config["model"],
-            temperature=temperature,
-            streaming=False,
-        )
+        groq_kwargs = {
+            "model": config["model"],
+            "temperature": temperature,
+            "streaming": False,
+        }
+
+        if max_tokens is not None:
+            groq_kwargs["max_tokens"] = max_tokens
+
+        return ChatGroq(**groq_kwargs)
 
     raise ValueError(
         f"Unsupported model provider: {config['provider']}"

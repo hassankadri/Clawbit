@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
 import uuid
 
 from agent import get_agent
@@ -15,7 +16,9 @@ from rag import (
     SUPPORTED_IMAGE_SUFFIXES,
 )
 
+
 SUPPORTED_UPLOAD_SUFFIXES = SUPPORTED_DOCUMENT_SUFFIXES | SUPPORTED_IMAGE_SUFFIXES
+
 UPLOAD_SUFFIX_BY_MIME = {
     "application/pdf": ".pdf",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
@@ -26,6 +29,7 @@ UPLOAD_SUFFIX_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/webp": ".webp",
 }
+
 
 app = FastAPI()
 
@@ -47,6 +51,7 @@ class ChatRequest(BaseModel):
     model: str = "gemini-3.1-flash-lite"
     thread_id: str | None = None
     attachment_ids: list[str] = Field(default_factory=list)
+    mode: str = "normal"
 
 
 class UploadResponse(BaseModel):
@@ -71,6 +76,7 @@ def extract_text_content(message) -> str:
 
     if isinstance(content, list):
         parts = []
+
         for item in content:
             if isinstance(item, dict):
                 text = item.get("text")
@@ -78,6 +84,7 @@ def extract_text_content(message) -> str:
                     parts.append(text)
             elif isinstance(item, str):
                 parts.append(item)
+
         return "".join(parts)
 
     return str(content)
@@ -87,12 +94,22 @@ def _is_vision_model(model_name: str) -> bool:
     return model_name.lower().startswith("gemini")
 
 
-def _build_user_message(message_text: str, attachments: list[dict], model_name: str):
+def _build_user_message(
+    message_text: str,
+    attachments: list[dict],
+    model_name: str,
+):
     text_blocks: list[dict] = []
+
     normalized_text = message_text.strip()
 
     if normalized_text:
-        text_blocks.append({"type": "text", "text": normalized_text})
+        text_blocks.append(
+            {
+                "type": "text",
+                "text": normalized_text,
+            }
+        )
     elif attachments:
         text_blocks.append(
             {
@@ -102,17 +119,13 @@ def _build_user_message(message_text: str, attachments: list[dict], model_name: 
         )
 
     image_blocks = []
-    image_attachments = [
-        attachment
-        for attachment in attachments
-        if attachment.get("kind") == "image"
-    ]
 
     for attachment in attachments:
         if attachment.get("kind") != "image":
             continue
 
         path_value = attachment.get("path")
+
         if not path_value:
             continue
 
@@ -121,6 +134,7 @@ def _build_user_message(message_text: str, attachments: list[dict], model_name: 
 
         path = Path(path_value)
         mime_type = attachment.get("mime_type") or "image/png"
+
         image_blocks.append(
             {
                 "type": "image",
@@ -130,24 +144,29 @@ def _build_user_message(message_text: str, attachments: list[dict], model_name: 
         )
 
     document_context = []
+
     if attachments:
         document_context_text = []
+
         for attachment in attachments:
-            if attachment.get("kind") == "document":
-                path_value = attachment.get("path")
-                document_text = ""
+            if attachment.get("kind") != "document":
+                continue
 
-                if path_value:
-                    try:
-                        document_text = read_file_text(path_value).strip()
-                    except Exception:
-                        document_text = ""
+            path_value = attachment.get("path")
+            document_text = ""
 
-                preview = document_text[:12000] or attachment.get("preview")
-                if preview:
-                    document_context_text.append(
-                        f"Document: {attachment.get('name', 'uploaded document')}\n{preview}"
-                    )
+            if path_value:
+                try:
+                    document_text = read_file_text(path_value).strip()
+                except Exception:
+                    document_text = ""
+
+            preview = document_text[:12000] or attachment.get("preview")
+
+            if preview:
+                document_context_text.append(
+                    f"Document: {attachment.get('name', 'uploaded document')}\n{preview}"
+                )
 
         if document_context_text:
             document_context.append(
@@ -183,8 +202,12 @@ async def upload_attachment(
     file: UploadFile = File(...),
 ):
     suffix = Path(file.filename or "").suffix.lower()
+
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
-        suffix = UPLOAD_SUFFIX_BY_MIME.get((file.content_type or "").lower(), "")
+        suffix = UPLOAD_SUFFIX_BY_MIME.get(
+            (file.content_type or "").lower(),
+            "",
+        )
 
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
         raise HTTPException(
@@ -196,9 +219,15 @@ async def upload_attachment(
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     safe_name = Path(file.filename or "upload").name
-    if Path(safe_name).suffix.lower() not in SUPPORTED_UPLOAD_SUFFIXES and suffix:
+
+    if (
+        Path(safe_name).suffix.lower() not in SUPPORTED_UPLOAD_SUFFIXES
+        and suffix
+    ):
         safe_name = f"{Path(safe_name).stem}{suffix}"
+
     attachment_path = upload_dir / f"{uuid.uuid4().hex}_{safe_name}"
+
     content = await file.read()
     attachment_path.write_bytes(content)
 
@@ -211,7 +240,11 @@ async def upload_attachment(
     except Exception as exc:
         if attachment_path.exists():
             attachment_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail=str(exc))
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        )
 
     return UploadResponse(
         attachment_id=record["attachment_id"],
@@ -228,22 +261,40 @@ async def chat(req: ChatRequest):
     thread_id = req.thread_id or str(uuid.uuid4())
     attachment_ids = req.attachment_ids or []
 
-    attachments = get_attachment_records(thread_id, attachment_ids)
+    attachments = get_attachment_records(
+        thread_id,
+        attachment_ids,
+    )
+
     if attachments and any(
-        attachment.get("kind") == "image" for attachment in attachments
+        attachment.get("kind") == "image"
+        for attachment in attachments
     ) and not _is_vision_model(req.model):
         return ChatResponse(
-            response="The selected model does not support image understanding. Please choose a vision-capable model.",
+            response=(
+                "The selected model does not support image understanding. "
+                "Please choose a vision-capable model."
+            ),
             thread_id=thread_id,
         )
-    agent = get_agent(req.model)
-    print("Agent loaded successfully")
 
+    agent = get_agent(
+        req.model,
+        req.mode,
+    )
+
+    print("Agent loaded successfully")
     print("Calling agent.invoke...")
+
     user_message = {
         "role": "user",
-        "content": _build_user_message(req.message, attachments, req.model),
+        "content": _build_user_message(
+            req.message,
+            attachments,
+            req.model,
+        ),
     }
+
     result = agent.invoke(
         {
             "messages": [user_message],
@@ -253,9 +304,11 @@ async def chat(req: ChatRequest):
                 "thread_id": thread_id,
                 "attachment_ids": attachment_ids,
                 "model": req.model,
+                "mode": req.mode,
             }
         },
     )
+
     if isinstance(result, dict):
         messages = result.get("messages", [])
 
