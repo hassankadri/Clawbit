@@ -8,8 +8,10 @@ from rag import retrieve_from_rag
 from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
+from pathlib import Path
 
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(ENV_PATH)
 
 def _get_request_context(runtime: ToolRuntime) -> tuple[str, list[str]]:
     configurable = runtime.config.get("configurable", {})

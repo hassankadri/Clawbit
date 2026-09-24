@@ -5,7 +5,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import certifi
 
-load_dotenv()
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(ENV_PATH)
 
 for proxy_key in (
     "HTTP_PROXY",
