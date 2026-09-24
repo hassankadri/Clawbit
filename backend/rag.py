@@ -7,6 +7,7 @@ from uuid import uuid4
 from dotenv import load_dotenv
 import os
 import certifi
+from rank_bm25 import BM25Okapi
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(ENV_PATH)
@@ -273,6 +274,105 @@ def build_attachment_context(thread_id: str, attachment_ids: list[str] | None = 
 
     return "\n".join(parts)
 
+def _tokenize_for_bm25(text: str) -> list[str]:
+    return re.findall(
+        r"[a-z0-9]+(?:[-_./][a-z0-9]+)*",
+        text.lower(),
+    )
+
+def _bm25_search(
+    query: str,
+    thread_id: str,
+    attachment_ids: list[str] | None = None,
+    limit: int = 12,
+) -> list[Document]:
+    search_filter = {"thread_id": thread_id}
+
+    if attachment_ids:
+        if len(attachment_ids) == 1:
+            attachment_filter = attachment_ids[0]
+        else:
+            attachment_filter = {"$in": attachment_ids}
+
+        search_filter = {
+            "$and": [
+                {"thread_id": thread_id},
+                {"attachment_id": attachment_filter},
+            ]
+        }
+
+    data = vectorstore.get(
+        where=search_filter,
+        include=["documents", "metadatas"],
+    )
+
+    documents = data.get("documents") or []
+    metadatas = data.get("metadatas") or []
+
+    if not documents:
+        return []
+
+    tokenized_documents = [
+        _tokenize_for_bm25(document)
+        for document in documents
+    ]
+
+    tokenized_query = _tokenize_for_bm25(query)
+
+    if not tokenized_query:
+        return []
+
+    bm25 = BM25Okapi(tokenized_documents)
+    scores = bm25.get_scores(tokenized_query)
+
+    ranked_indexes = sorted(
+        range(len(documents)),
+        key=lambda index: scores[index],
+        reverse=True,
+    )
+
+    results = []
+
+    for index in ranked_indexes[:limit]:
+        results.append(
+            Document(
+                page_content=documents[index],
+                metadata=metadatas[index],
+            )
+        )
+
+    return results
+
+def _merge_hybrid_results(
+    vector_docs: list[Document],
+    bm25_docs: list[Document],
+    limit: int = 12,
+) -> list[Document]:
+    scores = {}
+    documents = {}
+
+    for ranked_docs in (vector_docs, bm25_docs):
+        for rank, doc in enumerate(ranked_docs, start=1):
+            key = (
+                doc.metadata.get("attachment_id"),
+                doc.metadata.get("page"),
+                doc.page_content,
+            )
+
+            documents[key] = doc
+
+            scores[key] = scores.get(key, 0) + (1 / rank)
+
+    ranked_keys = sorted(
+        scores,
+        key=scores.get,
+        reverse=True,
+    )
+
+    return [
+        documents[key]
+        for key in ranked_keys[:limit]
+    ]
 
 def retrieve_from_rag(
     query: str,
@@ -290,7 +390,8 @@ def retrieve_from_rag(
 
     try:
         if attachment_ids and not document_attachment_ids:
-            docs = []
+            vector_docs = []
+            bm25_docs = []
         else:
             search_filter = {"thread_id": thread_id}
 
@@ -307,11 +408,27 @@ def retrieve_from_rag(
                     ]
                 }
 
-            docs = vectorstore.similarity_search(
+            search_limit = max(k * 4, 12)
+
+            vector_docs = vectorstore.similarity_search(
                 query,
-                k=max(k * 4, 12),
+                k=search_limit,
                 filter=search_filter,
             )
+
+            bm25_docs = _bm25_search(
+                query,
+                thread_id,
+                document_attachment_ids,
+                limit=search_limit,
+            )
+
+        docs = _merge_hybrid_results(
+            vector_docs,
+            bm25_docs,
+            limit=max(k * 4, 12),
+        )
+
     except Exception:
         docs = []
 
