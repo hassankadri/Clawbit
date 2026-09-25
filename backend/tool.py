@@ -40,6 +40,21 @@ def _get_request_context(
     return thread_id, attachment_ids
 
 
+def _get_workspace_id(
+    runtime: ToolRuntime,
+    thread_id: str,
+) -> str:
+    configurable = runtime.config.get(
+        "configurable",
+        {},
+    )
+
+    return (
+        configurable.get("workspace_id")
+        or thread_id
+    )
+
+
 web_search = TavilySearch(
     max_results=5,
     topic="general",
@@ -345,10 +360,18 @@ def remember_this(
     Save an important user preference or fact into long-term memory.
     Use this when the user asks you to remember something.
     """
-    thread_id, _ = _get_request_context(runtime)
+    thread_id, _ = _get_request_context(
+        runtime
+    )
+
+    workspace_id = _get_workspace_id(
+        runtime,
+        thread_id,
+    )
 
     return save_memory(
         thread_id=thread_id,
+        workspace_id=workspace_id,
         memory=memory,
     )
 
@@ -359,12 +382,20 @@ def recall_memory(
     runtime: ToolRuntime,
 ) -> str:
     """
-    Recall saved long-term memories about the user or this conversation.
+    Recall saved long-term memories from the current workspace.
     """
-    thread_id, _ = _get_request_context(runtime)
+    thread_id, _ = _get_request_context(
+        runtime
+    )
+
+    workspace_id = _get_workspace_id(
+        runtime,
+        thread_id,
+    )
 
     return search_memory(
         thread_id=thread_id,
+        workspace_id=workspace_id,
         query=query,
     )
 

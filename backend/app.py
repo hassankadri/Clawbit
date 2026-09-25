@@ -12,7 +12,6 @@ from rag import (
     SUPPORTED_DOCUMENT_SUFFIXES,
     SUPPORTED_IMAGE_SUFFIXES,
     get_attachment_records,
-    read_file_text,
     save_uploaded_file,
 )
 
@@ -58,6 +57,7 @@ class ChatRequest(BaseModel):
     message: str
     model: str = "gemini-3.1-flash-lite"
     thread_id: str | None = None
+    workspace_id: str | None = None
     attachment_ids: list[str] = Field(default_factory=list)
     mode: str = "normal"
 
@@ -170,6 +170,7 @@ def _build_user_message(
             continue
 
         path = Path(path_value)
+
         mime_type = (
             attachment.get("mime_type")
             or "image/png"
@@ -296,6 +297,11 @@ async def chat(req: ChatRequest):
         or str(uuid.uuid4())
     )
 
+    workspace_id = (
+        req.workspace_id
+        or thread_id
+    )
+
     attachment_ids = (
         req.attachment_ids
         or []
@@ -348,6 +354,7 @@ async def chat(req: ChatRequest):
         config={
             "configurable": {
                 "thread_id": thread_id,
+                "workspace_id": workspace_id,
                 "attachment_ids": attachment_ids,
                 "model": req.model,
                 "mode": req.mode,
