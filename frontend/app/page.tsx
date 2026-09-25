@@ -296,7 +296,7 @@ export default function Home() {
         );
         const previewItem: ConversationSummary = {
           id: activeConversationId,
-          title: summary.title,
+          title: existing?.title ?? summary.title,
           preview: summary.preview,
           pinned: existing?.pinned ?? false,
           snapshot,
@@ -338,7 +338,7 @@ export default function Home() {
   const shellClass = useMemo(
     () =>
       theme === "dark"
-        ? "bg-[#0b0d11] text-white"
+        ? "bg-[#000000] text-[#f5f5f5]"
         : "bg-[#eef1f6] text-[#111827]",
     [theme],
   );
@@ -404,6 +404,29 @@ export default function Home() {
       current.map((item) =>
         item.id === id
           ? { ...item, pinned: !item.pinned, updatedAt: Date.now() }
+          : item,
+      ),
+    );
+  }
+
+  function renameConversation(
+    id: string,
+    title: string,
+  ) {
+    const trimmed = title.trim();
+
+    if (!trimmed) {
+      return;
+    }
+
+    setConversationHistory((current) =>
+      current.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              title: trimmed,
+              updatedAt: Date.now(),
+            }
           : item,
       ),
     );
@@ -573,6 +596,7 @@ export default function Home() {
         onOpenConversation={openConversation}
         onTogglePinConversation={toggleConversationPin}
         onDeleteConversation={deleteConversation}
+        onRenameConversation={renameConversation}
       />
 
       <div className="relative flex flex-1 flex-col">
@@ -717,7 +741,7 @@ export default function Home() {
                           >
                             <Sparkles
                               size={18}
-                              className="text-violet-500"
+                              className="text-zinc-400"
                             />
                             {item.label}
                           </Command.Item>
@@ -767,3 +791,4 @@ export default function Home() {
     </main>
   );
 }
+

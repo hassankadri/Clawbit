@@ -1,19 +1,38 @@
 "use client";
 
 import * as Popover from "@radix-ui/react-popover";
+
 import { motion } from "framer-motion";
+
 import {
   ArrowUp,
   Check,
   ChevronDown,
   Mic,
   Paperclip,
-  Search,
+  Plus,
+  Telescope,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react";
+
 import TextareaAutosize from "react-textarea-autosize";
 
-import { uploadAttachment } from "@/lib/api";
+import {
+  getActiveChatMode,
+  setActiveChatMode,
+  uploadAttachment,
+  type ChatMode,
+} from "@/lib/api";
+
 import { MODELS } from "@/lib/models";
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
@@ -23,12 +42,19 @@ interface ComposerProps {
   model: string;
   threadId: string;
   theme: Theme;
+
   prefill?: {
     id: number;
     text: string;
   } | null;
+
   onModelChange: (model: string) => void;
-  onSend: (message: string, attachmentIds?: string[]) => Promise<void>;
+
+  onSend: (
+    message: string,
+    attachmentIds?: string[],
+  ) => Promise<void>;
+
   onAttachmentsCommitted?: (
     attachments: Array<{
       id: string;
@@ -42,8 +68,14 @@ interface ComposerProps {
   ) => void;
 }
 
-type AttachmentStatus = "uploading" | "ready" | "error";
-type AttachmentKind = "document" | "image";
+type AttachmentStatus =
+  | "uploading"
+  | "ready"
+  | "error";
+
+type AttachmentKind =
+  | "document"
+  | "image";
 
 interface AttachmentItem {
   id: string;
@@ -78,10 +110,23 @@ interface SpeechRecognitionLike {
   lang: string;
   interimResults: boolean;
   continuous: boolean;
-  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
-  onstart: (() => void) | null;
+
+  onresult:
+    | ((event: SpeechRecognitionEventLike) => void)
+    | null;
+
+  onend:
+    | (() => void)
+    | null;
+
+  onerror:
+    | ((event: SpeechRecognitionErrorEventLike) => void)
+    | null;
+
+  onstart:
+    | (() => void)
+    | null;
+
   start: () => void;
   stop: () => void;
   abort: () => void;
@@ -110,12 +155,16 @@ const acceptedMimeTypes = new Set([
   "image/webp",
 ]);
 
-const availableModels = MODELS.filter((item) => item.available);
+const availableModels = MODELS.filter(
+  (item) => item.available,
+);
 
 const mimeExtensionMap: Record<string, string> = {
   "application/pdf": "pdf",
+
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
     "docx",
+
   "text/plain": "txt",
   "text/markdown": "md",
   "text/csv": "csv",
@@ -135,22 +184,55 @@ export default function Composer({
   onAttachmentsCommitted,
 }: ComposerProps) {
   const [message, setMessage] = useState("");
-  const [modelOpen, setModelOpen] = useState(false);
-  const [attachments, setAttachments] = useState<AttachmentItem[]>([]);
-  const [modelFilter, setModelFilter] = useState("");
-  const [isRecording, setIsRecording] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
 
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const [modelOpen, setModelOpen] =
+    useState(false);
+
+  const [chatMode, setChatMode] =
+    useState<ChatMode>(
+      () => getActiveChatMode(),
+    );
+
+  const [attachments, setAttachments] =
+    useState<AttachmentItem[]>([]);
+
+  const [isRecording, setIsRecording] =
+    useState(false);
+
+  const [isDragging, setIsDragging] =
+    useState(false);
+
+  const [voiceNotice, setVoiceNotice] =
+    useState<string | null>(null);
+
+  const textareaRef =
+    useRef<HTMLTextAreaElement | null>(null);
+
+  const fileInputRef =
+    useRef<HTMLInputElement | null>(null);
+
+  const recognitionRef =
+    useRef<SpeechRecognitionLike | null>(null);
+
   const dragDepthRef = useRef(0);
-  const attachmentsRef = useRef<AttachmentItem[]>([]);
-  const voiceBaseMessageRef = useRef("");
-  const voiceTranscriptRef = useRef("");
+
+  const attachmentsRef =
+    useRef<AttachmentItem[]>([]);
+
+  const voiceBaseMessageRef =
+    useRef("");
+
+  const voiceTranscriptRef =
+    useRef("");
+
   const uploadAbortersRef = useRef(
-    new Map<string, { abort: () => void; promise: Promise<unknown> }>(),
+    new Map<
+      string,
+      {
+        abort: () => void;
+        promise: Promise<unknown>;
+      }
+    >(),
   );
 
   useEffect(() => {
@@ -165,80 +247,131 @@ export default function Composer({
       setVoiceNotice(null);
     });
 
-    const frameId = window.requestAnimationFrame(() => {
-      const textarea = textareaRef.current;
+    const frameId =
+      window.requestAnimationFrame(() => {
+        const textarea =
+          textareaRef.current;
 
-      if (!textarea) return;
+        if (!textarea) return;
 
-      textarea.focus();
-      textarea.setSelectionRange(prefill.text.length, prefill.text.length);
-    });
+        textarea.focus();
 
-    return () => window.cancelAnimationFrame(frameId);
+        textarea.setSelectionRange(
+          prefill.text.length,
+          prefill.text.length,
+        );
+      });
+
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
   }, [prefill]);
 
   useEffect(() => {
-    const aborters = uploadAbortersRef.current;
+    const aborters =
+      uploadAbortersRef.current;
 
     return () => {
       recognitionRef.current?.abort?.();
+
       recognitionRef.current = null;
 
-      aborters.forEach((entry) => entry.abort());
+      aborters.forEach(
+        (entry) => entry.abort(),
+      );
+
       aborters.clear();
     };
   }, []);
 
   useEffect(() => {
-    attachmentsRef.current = attachments;
+    attachmentsRef.current =
+      attachments;
   }, [attachments]);
 
   const selectedModel = useMemo(() => {
     return (
-      availableModels.find((item) => item.id === model) ??
+      availableModels.find(
+        (item) => item.id === model,
+      ) ??
       availableModels[0] ??
       MODELS[0]
     );
   }, [model]);
 
-  const filteredModels = useMemo(() => {
-    const query = modelFilter.trim().toLowerCase();
-    if (!query) return availableModels;
-    return availableModels.filter((item) =>
-      [item.label, item.provider, item.description]
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
+  const canSend =
+    message.trim().length > 0 ||
+    attachments.some(
+      (item) =>
+        item.status === "ready" &&
+        Boolean(item.serverId),
     );
-  }, [modelFilter]);
 
-  function patchAttachment(id: string, updater: (item: AttachmentItem) => AttachmentItem) {
+  function changeChatMode(
+    mode: ChatMode,
+  ) {
+    setChatMode(mode);
+    setActiveChatMode(mode);
+  }
+
+  function patchAttachment(
+    id: string,
+    updater: (
+      item: AttachmentItem,
+    ) => AttachmentItem,
+  ) {
     setAttachments((current) =>
-      current.map((item) => (item.id === id ? updater(item) : item)),
+      current.map((item) =>
+        item.id === id
+          ? updater(item)
+          : item,
+      ),
     );
   }
 
-  function removeAttachment(id: string) {
-    uploadAbortersRef.current.get(id)?.abort();
+  function removeAttachment(
+    id: string,
+  ) {
+    uploadAbortersRef.current
+      .get(id)
+      ?.abort();
+
     uploadAbortersRef.current.delete(id);
-    setAttachments((current) => current.filter((item) => item.id !== id));
+
+    setAttachments((current) =>
+      current.filter(
+        (item) => item.id !== id,
+      ),
+    );
   }
 
-  function normalizeUploadFile(file: File) {
-    if (/\.[a-z0-9]+$/i.test(file.name)) {
+  function normalizeUploadFile(
+    file: File,
+  ) {
+    if (
+      /\.[a-z0-9]+$/i.test(file.name)
+    ) {
       return file;
     }
 
-    const extension = mimeExtensionMap[file.type.toLowerCase()];
+    const extension =
+      mimeExtensionMap[
+        file.type.toLowerCase()
+      ];
 
     if (!extension) {
       return file;
     }
 
-    return new File([file], `${file.name}.${extension}`, {
-      type: file.type,
-      lastModified: file.lastModified,
-    });
+    return new File(
+      [file],
+      `${file.name}.${extension}`,
+      {
+        type: file.type,
+        lastModified:
+          file.lastModified,
+      },
+    );
   }
 
   function stopVoiceRecording() {
@@ -246,20 +379,28 @@ export default function Composer({
   }
 
   function finalizeVoicePrompt() {
-    const finalText = voiceTranscriptRef.current.trim();
+    const finalText =
+      voiceTranscriptRef.current.trim();
 
     recognitionRef.current = null;
+
     setIsRecording(false);
+
     if (finalText) {
       setMessage(finalText);
     }
   }
 
   function startVoiceRecording() {
-    const recognitionWindow = window as Window & {
-      SpeechRecognition?: new () => SpeechRecognitionLike;
-      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
-    };
+    const recognitionWindow =
+      window as Window & {
+        SpeechRecognition?:
+          new () => SpeechRecognitionLike;
+
+        webkitSpeechRecognition?:
+          new () => SpeechRecognitionLike;
+      };
+
     const SpeechRecognition =
       recognitionWindow.SpeechRecognition ??
       recognitionWindow.webkitSpeechRecognition;
@@ -268,6 +409,7 @@ export default function Composer({
       setVoiceNotice(
         "Voice input is not supported in this browser. Try Chrome or Edge.",
       );
+
       return;
     }
 
@@ -276,10 +418,17 @@ export default function Composer({
       return;
     }
 
-    const recognition = new SpeechRecognition();
-    voiceBaseMessageRef.current = message;
-    voiceTranscriptRef.current = message.trim();
+    const recognition =
+      new SpeechRecognition();
+
+    voiceBaseMessageRef.current =
+      message;
+
+    voiceTranscriptRef.current =
+      message.trim();
+
     setVoiceNotice(null);
+
     recognition.lang = "en-US";
     recognition.interimResults = true;
     recognition.continuous = false;
@@ -288,19 +437,32 @@ export default function Composer({
       setIsRecording(true);
     };
 
-    recognition.onresult = (event: SpeechRecognitionEventLike) => {
-      const transcript = Array.from(event.results)
-        .map((result) => result[0]?.transcript ?? "")
-        .join(" ")
-        .trim();
+    recognition.onresult = (
+      event,
+    ) => {
+      const transcript =
+        Array.from(event.results)
+          .map(
+            (result) =>
+              result[0]?.transcript ??
+              "",
+          )
+          .join(" ")
+          .trim();
 
-      const combinedText = [voiceBaseMessageRef.current.trim(), transcript]
+      const combinedText = [
+        voiceBaseMessageRef.current.trim(),
+        transcript,
+      ]
         .filter(Boolean)
         .join(" ")
         .trim();
 
-      voiceTranscriptRef.current = combinedText;
+      voiceTranscriptRef.current =
+        combinedText;
+
       setMessage(combinedText);
+
       textareaRef.current?.focus();
     };
 
@@ -308,550 +470,1260 @@ export default function Composer({
       finalizeVoicePrompt();
     };
 
-    recognition.onerror = (event) => {
+    recognition.onerror = (
+      event,
+    ) => {
       recognitionRef.current = null;
-      setIsRecording(false);
-      voiceTranscriptRef.current = voiceBaseMessageRef.current;
 
-      if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+      setIsRecording(false);
+
+      voiceTranscriptRef.current =
+        voiceBaseMessageRef.current;
+
+      if (
+        event.error === "not-allowed" ||
+        event.error ===
+          "service-not-allowed"
+      ) {
         setVoiceNotice(
           "Microphone access was denied. Please allow access and try again.",
         );
       } else {
-        setVoiceNotice("Voice input stopped unexpectedly. Please try again.");
+        setVoiceNotice(
+          "Voice input stopped unexpectedly. Please try again.",
+        );
       }
     };
 
-    recognitionRef.current = recognition;
+    recognitionRef.current =
+      recognition;
 
     try {
       recognition.start();
     } catch {
       recognitionRef.current = null;
+
       setIsRecording(false);
-      setVoiceNotice("Voice input could not start in this browser.");
+
+      setVoiceNotice(
+        "Voice input could not start in this browser.",
+      );
     }
   }
 
-  function formatBytes(size: number) {
-    if (size < 1024) return `${size} B`;
-    if (size < 1024 * 1024) return `${Math.round(size / 1024)} KB`;
-    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  function formatBytes(
+    size: number,
+  ) {
+    if (size < 1024) {
+      return `${size} B`;
+    }
+
+    if (
+      size < 1024 * 1024
+    ) {
+      return `${Math.round(
+        size / 1024,
+      )} KB`;
+    }
+
+    return `${(
+      size /
+      (1024 * 1024)
+    ).toFixed(1)} MB`;
   }
 
-  function classifyFile(file: File): AttachmentKind | null {
-    const lowerName = file.name.toLowerCase();
-    const mimeType = file.type.toLowerCase();
+  function classifyFile(
+    file: File,
+  ): AttachmentKind | null {
+    const lowerName =
+      file.name.toLowerCase();
+
+    const mimeType =
+      file.type.toLowerCase();
 
     const isDocument =
-      acceptedExtensions.some((ext) => lowerName.endsWith(ext)) &&
-      !mimeType.startsWith("image/");
+      acceptedExtensions.some(
+        (extension) =>
+          lowerName.endsWith(
+            extension,
+          ),
+      ) &&
+      !mimeType.startsWith(
+        "image/",
+      );
 
     const isImage =
-      mimeType.startsWith("image/") ||
-      /\.(png|jpg|jpeg|webp)$/i.test(file.name);
+      mimeType.startsWith(
+        "image/",
+      ) ||
+      /\.(png|jpg|jpeg|webp)$/i.test(
+        file.name,
+      );
 
-    if (isImage) return "image";
-    if (isDocument) return "document";
+    if (isImage) {
+      return "image";
+    }
 
-    if (acceptedMimeTypes.has(mimeType)) {
-      return mimeType.startsWith("image/") ? "image" : "document";
+    if (isDocument) {
+      return "document";
+    }
+
+    if (
+      acceptedMimeTypes.has(
+        mimeType,
+      )
+    ) {
+      return mimeType.startsWith(
+        "image/",
+      )
+        ? "image"
+        : "document";
     }
 
     return null;
   }
 
-  function summarizeFile(file: File, kind: AttachmentKind) {
+  function summarizeFile(
+    file: File,
+    kind: AttachmentKind,
+  ) {
     return {
-      detail: `${kind === "image" ? "Image" : "Document"} - ${formatBytes(file.size)}`,
+      detail:
+        `${
+          kind === "image"
+            ? "Image"
+            : "Document"
+        } · ${formatBytes(
+          file.size,
+        )}`,
+
       kind,
-      mimeType: file.type || "",
-      name: file.name,
-      size: file.size,
+
+      mimeType:
+        file.type || "",
+
+      name:
+        file.name,
+
+      size:
+        file.size,
     };
   }
 
-  async function addFiles(list: FileList | null) {
+  async function addFiles(
+    list: FileList | null,
+  ) {
     if (!list?.length) return;
 
-    const files = Array.from(list);
+    const files =
+      Array.from(list);
 
     for (const file of files) {
-      const kind = classifyFile(file);
-      const uploadFile = normalizeUploadFile(file);
-      const localId = crypto.randomUUID();
+      const kind =
+        classifyFile(file);
+
+      const uploadFile =
+        normalizeUploadFile(file);
+
+      const localId =
+        crypto.randomUUID();
 
       if (!kind) {
-        setAttachments((current) => [
-          {
-            id: localId,
-            kind: "document",
-            name: file.name,
-            detail: `Unsupported file type - ${formatBytes(file.size)}`,
-            size: file.size,
-            mimeType: file.type || "",
-            status: "error",
-            progress: 0,
-            error: "Unsupported file type. Upload PDF, DOCX, TXT, MD, CSV, or images.",
-          },
-          ...current,
-        ]);
+        setAttachments(
+          (current) => [
+            {
+              id: localId,
+
+              kind: "document",
+
+              name:
+                file.name,
+
+              detail:
+                `Unsupported file · ${formatBytes(
+                  file.size,
+                )}`,
+
+              size:
+                file.size,
+
+              mimeType:
+                file.type || "",
+
+              status:
+                "error",
+
+              progress:
+                0,
+
+              error:
+                "Unsupported file type. Upload PDF, DOCX, TXT, MD, CSV, or images.",
+            },
+
+            ...current,
+          ],
+        );
+
         continue;
       }
 
-      const summary = summarizeFile(file, kind);
+      const summary =
+        summarizeFile(
+          file,
+          kind,
+        );
 
-      setAttachments((current) => [
-        {
-          id: localId,
-          ...summary,
-          status: "uploading",
-          progress: 0,
-        },
-        ...current,
-      ]);
+      setAttachments(
+        (current) => [
+          {
+            id: localId,
 
-      const uploader = uploadAttachment(threadId, uploadFile, {
-        onProgress: (progress) => {
-          patchAttachment(localId, (item) => ({
-            ...item,
-            progress,
-          }));
-        },
-      });
+            ...summary,
 
-      uploadAbortersRef.current.set(localId, uploader);
+            status:
+              "uploading",
+
+            progress:
+              0,
+          },
+
+          ...current,
+        ],
+      );
+
+      const uploader =
+        uploadAttachment(
+          threadId,
+          uploadFile,
+          {
+            onProgress:
+              (progress) => {
+                patchAttachment(
+                  localId,
+                  (item) => ({
+                    ...item,
+                    progress,
+                  }),
+                );
+              },
+          },
+        );
+
+      uploadAbortersRef.current.set(
+        localId,
+        uploader,
+      );
 
       uploader.promise
         .then((response) => {
-          patchAttachment(localId, (item) => ({
-            ...item,
-            serverId: response.attachment_id,
-            preview: response.preview,
-            progress: 100,
-            status: "ready",
-            mimeType: response.mime_type || item.mimeType,
-            detail: `${item.kind === "image" ? "Image" : "Document"} - ${formatBytes(item.size)}`,
-          }));
+          patchAttachment(
+            localId,
+            (item) => ({
+              ...item,
+
+              serverId:
+                response.attachment_id,
+
+              preview:
+                response.preview,
+
+              progress:
+                100,
+
+              status:
+                "ready",
+
+              mimeType:
+                response.mime_type ||
+                item.mimeType,
+
+              detail:
+                `${
+                  item.kind ===
+                  "image"
+                    ? "Image"
+                    : "Document"
+                } · ${formatBytes(
+                  item.size,
+                )}`,
+            }),
+          );
         })
-        .catch((error: Error) => {
-          patchAttachment(localId, (item) => ({
-            ...item,
-            error: error.message || "Upload failed. Please try again.",
-            status: "error",
-          }));
-        })
+        .catch(
+          (error: Error) => {
+            patchAttachment(
+              localId,
+              (item) => ({
+                ...item,
+
+                error:
+                  error.message ||
+                  "Upload failed. Please try again.",
+
+                status:
+                  "error",
+              }),
+            );
+          },
+        )
         .finally(() => {
-          uploadAbortersRef.current.delete(localId);
+          uploadAbortersRef.current.delete(
+            localId,
+          );
         });
     }
   }
 
   async function waitForUploads() {
-    const pending = attachmentsRef.current
-      .map((item) => uploadAbortersRef.current.get(item.id)?.promise)
-      .filter((promise): promise is Promise<unknown> => Boolean(promise));
+    const pending =
+      attachmentsRef.current
+        .map(
+          (item) =>
+            uploadAbortersRef.current
+              .get(item.id)
+              ?.promise,
+        )
+        .filter(
+          (
+            promise,
+          ):
+            promise is Promise<unknown> =>
+              Boolean(promise),
+        );
 
-    if (pending.length === 0) return;
+    if (
+      pending.length === 0
+    ) {
+      return;
+    }
 
-    await Promise.allSettled(pending);
+    await Promise.allSettled(
+      pending,
+    );
   }
 
-  async function handleDrop(event: DragEvent<HTMLDivElement>) {
+  async function handleDrop(
+    event:
+      DragEvent<HTMLDivElement>,
+  ) {
     event.preventDefault();
+
     dragDepthRef.current = 0;
+
     setIsDragging(false);
-    await addFiles(event.dataTransfer.files);
+
+    await addFiles(
+      event.dataTransfer.files,
+    );
   }
 
-  function handleDragEnter(event: DragEvent<HTMLDivElement>) {
+  function handleDragEnter(
+    event:
+      DragEvent<HTMLDivElement>,
+  ) {
     event.preventDefault();
+
     dragDepthRef.current += 1;
+
     setIsDragging(true);
   }
 
-  function handleDragLeave(event: DragEvent<HTMLDivElement>) {
+  function handleDragLeave(
+    event:
+      DragEvent<HTMLDivElement>,
+  ) {
     event.preventDefault();
+
     dragDepthRef.current -= 1;
-    if (dragDepthRef.current <= 0) {
+
+    if (
+      dragDepthRef.current <= 0
+    ) {
       dragDepthRef.current = 0;
+
       setIsDragging(false);
     }
   }
 
-  async function send(overrideMessage?: string) {
+  async function send(
+    overrideMessage?: string,
+  ) {
     if (loading) return;
 
     await waitForUploads();
 
-    const readyAttachmentIds = attachmentsRef.current
-      .filter((item) => item.status === "ready" && item.serverId)
-      .map((item) => item.serverId as string);
-    const readyAttachments = attachmentsRef.current
-      .filter((item) => item.status === "ready" && item.serverId)
-      .map((item) => ({
-        id: item.serverId as string,
-        name: item.name,
-        size: item.size,
-        mimeType: item.mimeType,
-        detail: item.detail,
-        preview: item.preview,
-        kind: item.kind,
-      }));
+    const readyAttachmentIds =
+      attachmentsRef.current
+        .filter(
+          (item) =>
+            item.status ===
+              "ready" &&
+            Boolean(
+              item.serverId,
+            ),
+        )
+        .map(
+          (item) =>
+            item.serverId!,
+        );
 
-    const trimmed = (overrideMessage ?? message).trim();
-    if (!trimmed && readyAttachmentIds.length === 0) return;
+    const readyAttachments =
+      attachmentsRef.current
+        .filter(
+          (item) =>
+            item.status ===
+              "ready" &&
+            Boolean(
+              item.serverId,
+            ),
+        )
+        .map((item) => ({
+          id: item.serverId!,
 
-    onAttachmentsCommitted?.(readyAttachments);
+          name:
+            item.name,
+
+          size:
+            item.size,
+
+          mimeType:
+            item.mimeType,
+
+          detail:
+            item.detail,
+
+          preview:
+            item.preview,
+
+          kind:
+            item.kind,
+        }));
+
+    const trimmed =
+      (
+        overrideMessage ??
+        message
+      ).trim();
+
+    if (
+      !trimmed &&
+      readyAttachmentIds.length === 0
+    ) {
+      return;
+    }
+
+    onAttachmentsCommitted?.(
+      readyAttachments,
+    );
+
     setMessage("");
     setAttachments([]);
     setVoiceNotice(null);
 
-    await onSend(trimmed, readyAttachmentIds);
+    await onSend(
+      trimmed,
+      readyAttachmentIds,
+    );
   }
 
   return (
-    <div className="px-5 pb-5 pt-2.5 lg:px-8">
+    <div className="px-5 pb-5 pt-2 lg:px-8">
+
       <motion.div
         layout
-        onDragEnter={handleDragEnter}
+
+        onDragEnter={
+          handleDragEnter
+        }
+
         onDragOver={(event) => {
           event.preventDefault();
+
           setIsDragging(true);
         }}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+
+        onDragLeave={
+          handleDragLeave
+        }
+
+        onDrop={
+          handleDrop
+        }
+
         className={cn(
-            "ui-surface-elevated mx-auto max-w-4xl overflow-hidden border border-[color:var(--border)]/60 dark:rounded-[16px] dark:border-white/[0.04] dark:bg-[#11151b] dark:shadow-none",
-          isDragging ? "ring-2 ring-violet-500/30" : "",
+          "mx-auto max-w-[860px] overflow-visible rounded-[28px] border",
+
           theme === "dark"
-            ? "bg-[linear-gradient(180deg,rgba(17,17,22,0.98),rgba(16,16,21,0.98))]"
-            : "bg-[linear-gradient(180deg,rgba(249,250,252,0.98),rgba(236,239,244,0.98))]",
+            ? "border-white/[0.07] bg-[#212121]"
+            : "border-black/[0.08] bg-[#f1f1f1]",
+
+          isDragging
+            ? "ring-2 ring-white/[0.12]"
+            : "",
         )}
       >
+
+        {/* ATTACHMENTS */}
+
         {attachments.length > 0 ? (
-          <div className="border-b border-[color:var(--border)]/70 px-4 pt-3 dark:border-white/[0.04]">
+          <div className="px-4 pb-1 pt-3">
+
             <div className="flex flex-wrap gap-2">
-              {attachments.map((item) => (
-                <div
-                  key={item.id}
-                  className={cn(
-                    "group flex items-center gap-3 rounded-[14px] border px-3 py-2 text-[13px] transition",
-                    item.status === "error"
-                      ? theme === "dark"
-                        ? "border-rose-500/30 bg-rose-500/8 text-rose-200"
-                        : "border-rose-400/45 bg-rose-50 text-rose-900"
-                      : theme === "dark"
-                        ? "border-white/[0.04] bg-[#12161c] text-zinc-200"
-                        : "border-slate-300/80 bg-[#f7f8fb] text-slate-800 shadow-[0_8px_20px_rgba(15,23,42,0.06)]",
-                  )}
-                >
+
+              {attachments.map(
+                (item) => (
                   <div
+                    key={item.id}
+
                     className={cn(
-                      "flex h-7 w-7 items-center justify-center rounded-[11px]",
-                      item.status === "error"
-                        ? theme === "dark"
-                          ? "bg-rose-500/10 text-rose-300"
-                          : "bg-rose-100 text-rose-700"
-                        : theme === "dark"
-                        ? "bg-[#11151b]"
-                          : "bg-slate-200/80 text-slate-700",
+                      "flex max-w-[300px] items-center gap-2 rounded-[13px] border px-3 py-2",
+
+                      item.status ===
+                      "error"
+                        ? "border-red-500/25 bg-red-500/[0.07]"
+                        : theme ===
+                            "dark"
+                          ? "border-white/[0.07] bg-[#292929]"
+                          : "border-black/[0.08] bg-white",
                     )}
                   >
-                    <Paperclip size={15} />
-                  </div>
 
-                  <div className="min-w-0">
-                    <p className="max-w-[220px] truncate font-medium leading-5">{item.name}</p>
-                    <p
-                      className={cn(
-                        "text-[11px]",
-                        item.status === "error"
-                          ? theme === "dark"
-                            ? "text-rose-300"
-                            : "text-rose-700"
-                          : theme === "dark"
-                            ? "text-zinc-500"
-                            : "text-slate-600",
-                      )}
-                    >
-                      {item.status === "uploading"
-                        ? `Uploading ${item.progress}%`
-                        : item.status === "error"
-                          ? item.error ?? "Upload failed"
-                          : item.detail}
-                    </p>
-                    {item.preview && item.status === "ready" ? (
-                      <p
-                        className={cn(
-                          "mt-1 max-w-[300px] truncate text-[11px]",
-                          theme === "dark" ? "text-zinc-500" : "text-slate-500",
-                        )}
-                      >
-                        {item.preview}
+                    <Paperclip
+                      size={14}
+
+                      className="shrink-0 text-zinc-500"
+                    />
+
+
+                    <div className="min-w-0 flex-1">
+
+                      <p className="truncate text-[11px] font-medium">
+                        {item.name}
                       </p>
-                    ) : null}
-                  </div>
 
-                  <div className="flex items-center gap-2">
-                    {item.status === "uploading" ? (
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
-                          theme === "dark"
-                            ? "bg-[#12161c] text-zinc-300"
-                            : "bg-slate-200 text-slate-700",
-                        )}
-                      >
-                        Loading
-                      </span>
-                    ) : null}
+
+                      <p className="mt-0.5 truncate text-[9px] text-zinc-500">
+
+                        {item.status ===
+                        "uploading"
+                          ? `Uploading ${item.progress}%`
+
+                          : item.status ===
+                              "error"
+                            ? item.error ??
+                              "Upload failed"
+
+                            : item.detail}
+
+                      </p>
+
+                    </div>
+
 
                     <button
                       type="button"
-                      title="Remove attachment"
-                      onClick={() => removeAttachment(item.id)}
-                      className={cn(
-                        "rounded-full p-1 opacity-70 transition hover:opacity-100",
-                        theme === "dark"
-                          ? "hover:bg-white/[0.03]"
-                          : "hover:bg-slate-200",
-                      )}
+
+                      onClick={() =>
+                        removeAttachment(
+                          item.id,
+                        )
+                      }
+
+                      className="flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 hover:bg-white/[0.08] hover:text-white"
                     >
-                      x
+
+                      <X size={12} />
+
                     </button>
+
                   </div>
-                </div>
-              ))}
+                ),
+              )}
+
             </div>
+
           </div>
         ) : null}
 
-        <TextareaAutosize
-          ref={textareaRef}
-          minRows={2}
-          maxRows={8}
-          value={message}
-          placeholder="How can I help you today?"
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              void send();
-            }
-          }}
-          className={cn(
-            "w-full resize-none bg-transparent px-4 pt-4 text-[14px] leading-6 outline-none shadow-none ring-0 focus:outline-none focus:ring-0 focus:shadow-none focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none",
-            theme === "dark"
-              ? "text-white placeholder:text-zinc-500"
-              : "text-slate-950 placeholder:text-slate-500",
-          )}
-          style={{ boxShadow: "none" }}
-        />
 
-        {voiceNotice || isRecording ? (
-          <div
-            className={cn(
-              "px-4 pt-2 text-[11px]",
-              isRecording
-                ? "text-violet-500"
-                : theme === "dark"
-                  ? "text-zinc-400"
-                  : "text-slate-500",
-            )}
-          >
-            {isRecording ? "Listening... speak now." : voiceNotice}
-          </div>
-        ) : null}
+        {/*
+          Symmetrical composer.
 
-        <div className="flex items-center justify-between gap-3 px-3.5 pb-3.5 pt-3.5">
-          <div className="flex items-center gap-2">
-            <button
+          Outer height:
+          56px
+
+          top gap:
+          7px
+
+          bottom gap:
+          7px
+
+          left control:
+          40px
+
+          right controls:
+          40px height
+        */}
+
+        <div className="grid min-h-[56px] grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-x-1 px-2 py-[7px]">
+
+          {/* PLUS */}
+
+          <TooltipButton label="Add files">
+
+            <motion.button
               type="button"
-              title="Attach files"
-              aria-label="Add attachments"
-              onClick={() => fileInputRef.current?.click()}
-              className={cn(
-                "ui-icon-button transition hover:-translate-y-px",
-                theme === "dark"
-                  ? "bg-[color:var(--surface)] text-zinc-300 hover:text-white"
-                  : "border-slate-300 bg-slate-100 text-slate-700 hover:border-violet-300 hover:bg-violet-50 hover:text-slate-950",
-              )}
-            >
-              <Paperclip size={18} />
-            </button>
 
-            <button
-              type="button"
-              title={isRecording ? "Stop voice mode" : "Voice mode"}
-              aria-label="Voice input"
-              aria-pressed={isRecording}
-              onClick={() => {
-                if (isRecording) {
-                  stopVoiceRecording();
-                  return;
-                }
-
-                startVoiceRecording();
+              whileHover={{
+                scale: 1.07,
               }}
+
+              whileTap={{
+                scale: 0.92,
+              }}
+
+              onClick={() =>
+                fileInputRef.current
+                  ?.click()
+              }
+
+              aria-label="Add files"
+
               className={cn(
-                "ui-icon-button transition hover:-translate-y-px",
+                "flex h-10 w-10 items-center justify-center rounded-full",
+
                 theme === "dark"
-                  ? "bg-[color:var(--surface)] text-zinc-300 hover:text-white"
-                  : "border-slate-300 bg-slate-100 text-slate-700 hover:border-violet-300 hover:bg-violet-50 hover:text-slate-950",
-                isRecording
-                  ? "border-violet-500/30 bg-violet-500/8 text-violet-500 shadow-[0_0_0_1px_rgba(139,92,246,0.18)]"
-                  : "",
+                  ? "text-zinc-300 hover:bg-white/[0.07] hover:text-white"
+                  : "text-zinc-700 hover:bg-black/[0.05]",
               )}
             >
-              <Mic className={isRecording ? "animate-pulse" : ""} size={18} />
-            </button>
-          </div>
 
-          <div className="flex items-center gap-3">
-            <Popover.Root open={modelOpen} onOpenChange={setModelOpen}>
+              <Plus
+                size={21}
+                strokeWidth={1.8}
+              />
+
+            </motion.button>
+
+          </TooltipButton>
+
+
+          {/* INPUT */}
+
+          <TextareaAutosize
+  ref={textareaRef}
+  minRows={1}
+  maxRows={6}
+  value={message}
+  placeholder="Ask Clawbit"
+  onChange={(event) =>
+    setMessage(
+      event.target.value,
+    )
+  }
+  onKeyDown={(event) => {
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey
+    ) {
+      event.preventDefault();
+
+      void send();
+    }
+  }}
+  className={cn(
+    "block w-full min-w-0 resize-none border-0 bg-transparent px-3 py-0 text-[16px] leading-[24px] font-medium tracking-[-0.015em]",
+    "outline-none ring-0 shadow-none",
+    "focus:border-0 focus:outline-none focus:ring-0 focus:shadow-none",
+    "focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none",
+
+    theme === "dark"
+      ? "text-[#f2f2f2] placeholder:text-[#b8b8b8]"
+      : "text-zinc-900 placeholder:text-zinc-500",
+  )}
+  style={{
+    outline: "none",
+    border: "none",
+    boxShadow: "none",
+  }}
+/>
+
+
+          {/* RIGHT CONTROLS */}
+
+          <div className="flex h-10 shrink-0 items-center gap-0.5">
+
+            {/* MODEL */}
+
+            <Popover.Root
+              open={modelOpen}
+
+              onOpenChange={
+                setModelOpen
+              }
+            >
+
               <Popover.Trigger asChild>
-                <button
+
+                <motion.button
                   type="button"
-                  title="Model"
-                  aria-label="Choose model"
+
+                  whileHover={{
+                    backgroundColor:
+                      theme === "dark"
+                        ? "rgba(255,255,255,0.065)"
+                        : "rgba(0,0,0,0.05)",
+                  }}
+
+                  whileTap={{
+                    scale: 0.97,
+                  }}
+
                   className={cn(
-                    "inline-flex min-w-[200px] items-center justify-between gap-3 rounded-[16px] border px-3.5 py-2 text-left text-[13px] backdrop-blur-xl transition hover:-translate-y-px",
+                    "flex h-10 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium",
+
                     theme === "dark"
-                  ? "border-white/[0.04] bg-[#12161c] text-white"
-                      : "border-slate-300 bg-slate-100 text-slate-950 hover:border-violet-300 hover:bg-violet-50",
+                      ? "text-zinc-200"
+                      : "text-zinc-700",
                   )}
                 >
-                  <span className="inline-flex items-center gap-2">
-                    <Search size={15} className="text-violet-500" />
-                    <span className="font-medium">{selectedModel.label}</span>
+
+                  {chatMode ===
+                  "research" ? (
+                    <Telescope
+                      size={14}
+                    />
+                  ) : null}
+
+
+                  <span className="max-w-[165px] truncate">
+
+                    {
+                      selectedModel
+                        .label
+                    }
+
                   </span>
-                  <ChevronDown size={15} className="text-zinc-400" />
-                </button>
+
+
+                  <motion.span
+                    animate={{
+                      rotate:
+                        modelOpen
+                          ? 180
+                          : 0,
+                    }}
+
+                    transition={{
+                      duration: 0.24,
+                      ease:
+                        "easeInOut",
+                    }}
+                  >
+
+                    <ChevronDown
+                      size={13}
+
+                      className="text-zinc-500"
+                    />
+
+                  </motion.span>
+
+                </motion.button>
+
               </Popover.Trigger>
 
-              <Popover.Portal>
-                <Popover.Content
-                  side="top"
-                  align="end"
-                  sideOffset={14}
-                  className="ui-menu-surface z-50 w-[360px] p-2 text-[color:var(--foreground)]"
-                >
-                  <div className="px-3 py-2">
-                    <p className="text-[14px] font-semibold">Choose model</p>
-                    <p className={cn("text-[13px]", theme === "dark" ? "text-zinc-400" : "text-slate-600")}>
-                      Choose between available Gemini and Groq models.
-                    </p>
-                  </div>
 
-                  <div
+              {/*
+                IMPORTANT:
+                The portal/content are ALWAYS mounted.
+
+                That allows the CLOSED animation
+                to play completely.
+              */}
+
+              <Popover.Portal forceMount>
+
+                <Popover.Content
+                  forceMount
+
+                  side="top"
+
+                  align="end"
+
+                  sideOffset={10}
+
+                  asChild
+                >
+
+                  <motion.div
+                    initial={false}
+
+                    animate={
+                      modelOpen
+                        ? {
+                            opacity: 1,
+
+                            y: 0,
+
+                            scale: 1,
+
+                            pointerEvents:
+                              "auto",
+                          }
+
+                        : {
+                            opacity: 0,
+
+                            y: 9,
+
+                            scale: 0.97,
+
+                            pointerEvents:
+                              "none",
+                          }
+                    }
+
+                    transition={{
+                      opacity: {
+                        duration:
+                          0.22,
+
+                        ease:
+                          "easeInOut",
+                      },
+
+                      y: {
+                        duration:
+                          0.24,
+
+                        ease: [
+                          0.16,
+                          1,
+                          0.3,
+                          1,
+                        ],
+                      },
+
+                      scale: {
+                        duration:
+                          0.24,
+
+                        ease: [
+                          0.16,
+                          1,
+                          0.3,
+                          1,
+                        ],
+                      },
+                    }}
+
                     className={cn(
-                      "flex items-center gap-3 rounded-[14px] border px-3 py-3",
+                      "z-[100] w-[330px] origin-bottom-right rounded-[18px] border p-2 shadow-[0_24px_75px_rgba(0,0,0,0.70)]",
+
                       theme === "dark"
-                        ? "border-white/[0.04] bg-[#11151b]"
-                        : "border-slate-300 bg-slate-100",
+                        ? "border-white/[0.08] bg-[#242424] text-white"
+                        : "border-black/[0.10] bg-white text-zinc-900",
                     )}
                   >
-                    <Search
-                      size={16}
-                      className={theme === "dark" ? "text-zinc-500" : "text-slate-500"}
-                    />
-                    <input
-                      value={modelFilter}
-                      onChange={(event) => setModelFilter(event.target.value)}
-                      placeholder="Search models..."
+
+                    {/* MODELS */}
+
+                    <div className="space-y-1">
+
+                      {availableModels.map(
+                        (item) => {
+                          const selected =
+                            item.id ===
+                            model;
+
+                          return (
+                            <motion.button
+                              key={
+                                item.id
+                              }
+
+                              type="button"
+
+                              whileHover={{
+                                x: 2,
+                              }}
+
+                              whileTap={{
+                                scale:
+                                  0.985,
+                              }}
+
+                              transition={{
+                                duration:
+                                  0.14,
+                              }}
+
+                              onClick={() => {
+                                onModelChange(
+                                  item.id,
+                                );
+
+                                changeChatMode(
+                                  "normal",
+                                );
+
+                                setModelOpen(
+                                  false,
+                                );
+                              }}
+
+                              className={cn(
+                                "flex w-full items-center gap-3 rounded-[13px] px-3 py-2.5 text-left",
+
+                                selected &&
+                                chatMode ===
+                                  "normal"
+                                  ? theme ===
+                                    "dark"
+                                    ? "bg-white/[0.07]"
+                                    : "bg-black/[0.05]"
+
+                                  : theme ===
+                                    "dark"
+                                    ? "hover:bg-white/[0.055]"
+                                    : "hover:bg-black/[0.04]",
+                              )}
+                            >
+
+                              <div className="min-w-0 flex-1">
+
+                                <p className="truncate text-[13px] font-medium">
+                                  {
+                                    item.label
+                                  }
+                                </p>
+
+
+                                <p className="mt-0.5 truncate text-[11px] text-zinc-500">
+                                  {
+                                    item.description
+                                  }
+                                </p>
+
+                              </div>
+
+
+                              {selected &&
+                              chatMode ===
+                                "normal" ? (
+
+                                <Check
+                                  size={16}
+                                  className="shrink-0"
+                                />
+
+                              ) : null}
+
+                            </motion.button>
+                          );
+                        },
+                      )}
+
+                    </div>
+
+
+                    {/* SEPARATOR */}
+
+                    <div
                       className={cn(
-                        "w-full bg-transparent text-[14px] outline-none",
+                        "mx-2 my-2 border-t",
+
                         theme === "dark"
-                          ? "placeholder:text-zinc-500"
-                          : "text-slate-950 placeholder:text-slate-500",
+                          ? "border-white/[0.08]"
+                          : "border-black/[0.08]",
                       )}
                     />
-                  </div>
 
-                  <div className="mt-2 max-h-[320px] overflow-y-auto">
-                    {filteredModels.length === 0 ? (
-                      <div className="px-3 py-6 text-[14px] text-zinc-400">
-                        No available models found.
+
+                    {/* RESEARCH */}
+
+                    <motion.button
+                      type="button"
+
+                      whileHover={{
+                        x: 2,
+                      }}
+
+                      whileTap={{
+                        scale:
+                          0.985,
+                      }}
+
+                      transition={{
+                        duration:
+                          0.14,
+                      }}
+
+                      onClick={() => {
+                        changeChatMode(
+                          chatMode ===
+                            "research"
+                            ? "normal"
+                            : "research",
+                        );
+
+                        setModelOpen(
+                          false,
+                        );
+                      }}
+
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-[13px] px-3 py-3 text-left",
+
+                        chatMode ===
+                        "research"
+                          ? theme ===
+                            "dark"
+                            ? "bg-white/[0.08]"
+                            : "bg-black/[0.06]"
+
+                          : theme ===
+                            "dark"
+                            ? "hover:bg-white/[0.055]"
+                            : "hover:bg-black/[0.04]",
+                      )}
+                    >
+
+                      <div
+                        className={cn(
+                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]",
+
+                          theme === "dark"
+                            ? "bg-white/[0.06]"
+                            : "bg-black/[0.05]",
+                        )}
+                      >
+
+                        <Telescope
+                          size={16}
+                        />
+
                       </div>
-                    ) : (
-                      filteredModels.map((item) => (
-                        <button
-                          key={item.id}
-                          type="button"
-                          onClick={() => {
-                            onModelChange(item.id);
-                            setModelOpen(false);
-                          }}
-                          className={cn(
-                            "mt-1 flex w-full items-start justify-between rounded-[14px] px-3 py-3 text-left outline-none transition",
-                            theme === "dark"
-                              ? "text-white hover:bg-white/[0.03]"
-                              : "text-slate-950 hover:bg-violet-50",
-                          )}
-                        >
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <p className="text-[14px] font-medium">{item.label}</p>
-                              {item.badge ? (
-                                <span
-                                  className={cn(
-                                    "rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em]",
-                                    item.available
-                                      ? "bg-violet-500/12 text-violet-400"
-                                      : "bg-slate-200 text-slate-500 dark:bg-white/8 dark:text-zinc-500",
-                                  )}
-                                >
-                                  {item.badge}
-                                </span>
-                              ) : null}
-                            </div>
-                            <p className={cn("mt-1 text-xs", theme === "dark" ? "text-zinc-400" : "text-slate-600")}>
-                              {item.provider}
-                            </p>
-                            <p className={cn("mt-1 text-xs leading-5", theme === "dark" ? "text-zinc-500" : "text-slate-600")}>
-                              {item.description}
-                            </p>
-                          </div>
-                          {model === item.id ? <Check size={16} className="mt-1 text-violet-500" /> : null}
-                        </button>
-                      ))
-                    )}
-                  </div>
+
+
+                      <div className="min-w-0 flex-1">
+
+                        <p className="text-[13px] font-medium">
+                          Research mode
+                        </p>
+
+
+                        <p className="mt-0.5 text-[11px] text-zinc-500">
+                          Deeper web research and source checking
+                        </p>
+
+                      </div>
+
+
+                      {chatMode ===
+                      "research" ? (
+
+                        <Check
+                          size={16}
+                        />
+
+                      ) : null}
+
+                    </motion.button>
+
+                  </motion.div>
+
                 </Popover.Content>
+
               </Popover.Portal>
+
             </Popover.Root>
 
-            <button
-              type="button"
-              title="Send"
-              aria-label="Send message"
-              onClick={() => void send()}
-              disabled={loading}
-              className={cn(
-                "flex h-9 w-9 items-center justify-center rounded-[16px] text-white transition hover:-translate-y-px hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50",
-                theme === "dark"
-                  ? "bg-gradient-to-r from-violet-600 to-fuchsia-500 shadow-none"
-                  : "bg-gradient-to-r from-violet-700 to-fuchsia-600 shadow-[0_12px_26px_rgba(109,40,217,0.22)]",
-              )}
+
+            {/* MIC */}
+
+            <TooltipButton
+              label={
+                isRecording
+                  ? "Stop dictation"
+                  : "Dictate"
+              }
             >
-              <ArrowUp size={18} />
-            </button>
+
+              <motion.button
+                type="button"
+
+                whileHover={{
+                  scale: 1.07,
+                }}
+
+                whileTap={{
+                  scale: 0.92,
+                }}
+
+                onClick={() => {
+                  if (
+                    isRecording
+                  ) {
+                    stopVoiceRecording();
+
+                    return;
+                  }
+
+                  startVoiceRecording();
+                }}
+
+                aria-label="Dictate"
+
+                className={cn(
+                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+
+                  isRecording
+                    ? theme === "dark"
+                      ? "bg-white text-black"
+                      : "bg-black text-white"
+
+                    : theme === "dark"
+                      ? "text-zinc-300 hover:bg-white/[0.07] hover:text-white"
+                      : "text-zinc-700 hover:bg-black/[0.05]",
+                )}
+              >
+
+                <Mic
+                  size={19}
+
+                  className={
+                    isRecording
+                      ? "animate-pulse"
+                      : ""
+                  }
+                />
+
+              </motion.button>
+
+            </TooltipButton>
+
+
+            {/* SEND */}
+
+            {canSend ? (
+
+              <motion.button
+                type="button"
+
+                initial={{
+                  opacity: 0,
+                  scale: 0.8,
+                }}
+
+                animate={{
+                  opacity: 1,
+                  scale: 1,
+                }}
+
+                whileHover={{
+                  scale: 1.06,
+                }}
+
+                whileTap={{
+                  scale: 0.92,
+                }}
+
+                disabled={
+                  loading
+                }
+
+                onClick={() =>
+                  void send()
+                }
+
+                aria-label="Send"
+
+                className={cn(
+                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+
+                  theme === "dark"
+                    ? "bg-white text-black"
+                    : "bg-black text-white",
+                )}
+              >
+
+                <ArrowUp
+                  size={18}
+                  strokeWidth={2.2}
+                />
+
+              </motion.button>
+
+            ) : null}
+
           </div>
+
         </div>
+
+
+        {voiceNotice ||
+        isRecording ? (
+
+          <div className="px-5 pb-3 text-[11px] text-zinc-500">
+
+            {isRecording
+              ? "Listening..."
+              : voiceNotice}
+
+          </div>
+
+        ) : null}
+
 
         <input
           ref={fileInputRef}
+
           type="file"
+
           multiple
+
           accept=".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,image/png,image/jpeg,image/webp"
+
           className="hidden"
+
           onChange={(event) => {
-            void addFiles(event.target.files);
-            event.currentTarget.value = "";
+            void addFiles(
+              event.target.files,
+            );
+
+            event.currentTarget.value =
+              "";
           }}
         />
+
       </motion.div>
+
+    </div>
+  );
+}
+
+
+function TooltipButton({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="group relative shrink-0">
+
+      {children}
+
+
+      <div className="pointer-events-none absolute bottom-[calc(100%+9px)] left-1/2 z-[200] -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-[9px] border border-white/[0.08] bg-[#242424] px-2.5 py-1.5 text-[11px] font-medium text-white opacity-0 shadow-[0_8px_25px_rgba(0,0,0,0.45)] transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
+
+        {label}
+
+      </div>
+
     </div>
   );
 }

@@ -1,21 +1,35 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+
 import {
-  ChevronLeft,
-  ChevronRight,
+  AnimatePresence,
+  motion,
+} from "framer-motion";
+
+import {
   CircleHelp,
   FolderKanban,
   MessageSquare,
+  MoreHorizontal,
   Palette,
+  PanelLeftClose,
+  Pencil,
   Pin,
   Plus,
   PlugZap,
   Search,
   Settings2,
+  Share2,
+  SlidersHorizontal,
   Trash2,
+  UserRound,
 } from "lucide-react";
-import { useState } from "react";
+
+import {
+  useState,
+  type ComponentType,
+} from "react";
 
 import ClawbitMark from "@/components/brand/ClawbitMark";
 import UserAvatar from "@/components/common/UserAvatar";
@@ -41,533 +55,1107 @@ interface SidebarProps {
   theme: Theme;
   activeView: AppView;
   collapsed: boolean;
+
   pinnedChats: SidebarConversation[];
   recentChats: SidebarConversation[];
+
   activeConversationId: string | null;
+
   onNewChat: () => void;
   onNavigate: (view: AppView) => void;
   onToggleCollapsed: () => void;
   onOpenCommandPalette: () => void;
+
   onOpenConversation: (id: string) => void;
   onTogglePinConversation: (id: string) => void;
   onDeleteConversation: (id: string) => void;
+
+  onRenameConversation: (
+    id: string,
+    title: string,
+  ) => void;
 }
 
 const navigationItems = [
-  { id: "chats", label: "Chats", icon: MessageSquare },
-  { id: "projects", label: "Projects", icon: FolderKanban },
-  { id: "plugins", label: "Plugins", icon: PlugZap },
-  { id: "customize", label: "Customize", icon: Palette },
+  {
+    id: "chats",
+    label: "Chats",
+    icon: MessageSquare,
+  },
+  {
+    id: "projects",
+    label: "Workspaces",
+    icon: FolderKanban,
+  },
+  {
+    id: "plugins",
+    label: "Tools",
+    icon: PlugZap,
+  },
+  {
+    id: "customize",
+    label: "Customize",
+    icon: Palette,
+  },
 ] as const;
 
 export default function Sidebar({
   theme,
   activeView,
   collapsed,
+
   pinnedChats,
   recentChats,
+
   activeConversationId,
+
   onNewChat,
   onNavigate,
   onToggleCollapsed,
   onOpenCommandPalette,
+
   onOpenConversation,
   onTogglePinConversation,
   onDeleteConversation,
+  onRenameConversation,
 }: SidebarProps) {
   return (
     <motion.aside
-      layout
       initial={false}
-      animate={{ width: collapsed ? 80 : 252 }}
-      transition={{ type: "spring", stiffness: 320, damping: 32 }}
+      animate={{
+        width: collapsed ? 52 : 250,
+      }}
+      transition={{
+        type: "spring",
+        stiffness: 290,
+        damping: 31,
+      }}
       className={cn(
-        "ui-surface-elevated relative m-4 hidden shrink-0 overflow-hidden xl:flex dark:border-white/[0.04] dark:bg-[#0e1116] dark:shadow-[0_12px_28px_rgba(0,0,0,0.12)]",
-        theme === "dark" ? "text-white" : "text-slate-900",
+        "relative hidden h-screen shrink-0 border-r xl:flex",
+
+        theme === "dark"
+          ? collapsed
+            ? "border-white/[0.055] bg-[#0b0b0b]"
+            : "border-white/[0.055] bg-[#181818]"
+          : collapsed
+            ? "border-black/[0.08] bg-white"
+            : "border-black/[0.08] bg-[#f3f3f3]",
       )}
     >
       <div
         className={cn(
-          "pointer-events-none absolute inset-x-0 top-0 h-32 blur-3xl",
-          theme === "dark" ? "bg-white/[0.018]" : "bg-violet-200/40",
+          "flex h-full w-full min-w-0 flex-col",
+          collapsed
+            ? "px-1 pb-2 pt-3"
+            : "px-3 pb-3 pt-4",
         )}
-      />
+      >
+        {/* BRAND */}
 
-      <div className="relative flex h-full w-full flex-col px-3.5 pb-3.5 pt-[18px]">
-        <div className="flex items-center justify-between px-0.5">
-          <div className="flex items-center gap-2.5 overflow-hidden">
-            <AnimatePresence initial={false}>
-              {collapsed ? (
-                <motion.div
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }}
-                  transition={{ duration: 0.18 }}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[12px] bg-[#12161c] shadow-none"
-                >
-                  <ClawbitMark
-                    className={cn(
-                      "h-5 w-5",
-                      theme === "dark" ? "text-white" : "text-slate-900",
-                    )}
-                  />
-                </motion.div>
-              ) : (
-                <motion.div
-                  initial={{ opacity: 0, x: -10 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -10 }}
-                  transition={{ duration: 0.18 }}
-                  className="min-w-0"
-                >
-                  <ClawbitMark
-                    variant="horizontal"
-                    iconClassName={cn(
-                      "h-5 w-5",
-                      theme === "dark" ? "text-white" : "text-slate-900",
-                    )}
-                    wordmarkClassName={cn(
-                      "text-[17px] leading-none",
-                      theme === "dark" ? "text-white" : "text-slate-900",
-                    )}
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+        <div className="flex h-11 items-center">
+          {!collapsed ? (
+            <>
+              <div className="flex min-w-0 flex-1 items-center px-2">
+                <ClawbitMark
+                  variant="horizontal"
+                  iconClassName={cn(
+                    "h-[23px] w-[23px]",
+                    theme === "dark"
+                      ? "text-white"
+                      : "text-black",
+                  )}
+                  wordmarkClassName={cn(
+                    "text-[17px] font-semibold tracking-[-0.035em]",
+                    theme === "dark"
+                      ? "text-white"
+                      : "text-black",
+                  )}
+                />
+              </div>
 
-          <button
-            onClick={onToggleCollapsed}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={cn(
-              "ui-icon-button shrink-0",
-              theme === "dark"
-                ? "text-zinc-500 hover:text-white"
-                : "text-slate-400 hover:text-slate-900",
-            )}
-          >
-            {collapsed ? (
-              <ChevronRight size={18} />
-            ) : (
-              <ChevronLeft size={18} />
-            )}
-          </button>
+              <SidebarIconButton
+                label="Close sidebar"
+                icon={PanelLeftClose}
+                theme={theme}
+                onClick={onToggleCollapsed}
+              />
+            </>
+          ) : (
+            <div className="flex w-full justify-center">
+              <CollapsedBrandButton
+                theme={theme}
+                onClick={onToggleCollapsed}
+              />
+            </div>
+          )}
         </div>
 
-        <SidebarAction
-          label="New chat"
-          tooltip="New chat"
-          icon={Plus}
-          theme={theme}
-          collapsed={collapsed}
-          className="mt-5"
-          onClick={onNewChat}
-          accent
-        />
+        {/* TOP ACTIONS */}
 
-        <SidebarAction
-          label="Search chats"
-          tooltip="Search chats"
-          icon={Search}
-          theme={theme}
-          collapsed={collapsed}
-          className="mt-3.5"
-          onClick={onOpenCommandPalette}
-        />
+        <div className={collapsed ? "mt-4" : "mt-7"}>
+          <SidebarAction
+            icon={Plus}
+            label="New chat"
+            collapsed={collapsed}
+            theme={theme}
+            onClick={onNewChat}
+          />
 
-        <nav className="mt-4 space-y-1.5">
+          <div className="mt-1">
+            <SidebarAction
+              icon={Search}
+              label="Search"
+              collapsed={collapsed}
+              theme={theme}
+              onClick={onOpenCommandPalette}
+              shortcut="Ctrl K"
+            />
+          </div>
+        </div>
+
+        {/* NAV */}
+
+        <nav className="mt-5 space-y-1">
           {navigationItems.map((item) => (
-            <SidebarNavButton
+            <SidebarAction
               key={item.id}
               icon={item.icon}
               label={item.label}
-              tooltip={item.label}
-              theme={theme}
               collapsed={collapsed}
-              active={activeView === item.id}
-              onClick={() => onNavigate(item.id)}
+              theme={theme}
+              active={
+                activeView === item.id
+              }
+              onClick={() =>
+                onNavigate(item.id)
+              }
             />
           ))}
         </nav>
 
-        <AnimatePresence initial={false}>
-          {!collapsed ? (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 8 }}
-              transition={{ duration: 0.18 }}
-              className="mt-6 flex-1 overflow-y-auto pr-1"
-            >
-              <ConversationSection
-                title="Pinned"
-                theme={theme}
-                items={pinnedChats}
-                activeConversationId={activeConversationId}
-                onOpenConversation={onOpenConversation}
-                onTogglePinConversation={onTogglePinConversation}
-                onDeleteConversation={onDeleteConversation}
-              />
+        {/* HISTORY */}
 
-              <ConversationSection
-                title="Recent"
-                theme={theme}
-                className="mt-6"
-                items={recentChats}
-                activeConversationId={activeConversationId}
-                onOpenConversation={onOpenConversation}
-                onTogglePinConversation={onTogglePinConversation}
-                onDeleteConversation={onDeleteConversation}
-              />
-            </motion.div>
-          ) : (
-            <div className="flex-1" />
-          )}
-        </AnimatePresence>
+        {!collapsed ? (
+          <div className="mt-7 min-h-0 flex-1 overflow-y-auto px-1">
+            <ConversationSection
+              title="Pinned"
+              items={pinnedChats}
+              theme={theme}
+              activeConversationId={
+                activeConversationId
+              }
+              onOpenConversation={
+                onOpenConversation
+              }
+              onTogglePinConversation={
+                onTogglePinConversation
+              }
+              onDeleteConversation={
+                onDeleteConversation
+              }
+              onRenameConversation={
+                onRenameConversation
+              }
+            />
+
+            <ConversationSection
+              title="Recent"
+              items={recentChats}
+              theme={theme}
+              activeConversationId={
+                activeConversationId
+              }
+              onOpenConversation={
+                onOpenConversation
+              }
+              onTogglePinConversation={
+                onTogglePinConversation
+              }
+              onDeleteConversation={
+                onDeleteConversation
+              }
+              onRenameConversation={
+                onRenameConversation
+              }
+              className="mt-7"
+            />
+          </div>
+        ) : (
+          <div className="flex-1" />
+        )}
+
+        {/* ACCOUNT ONLY */}
 
         <div
           className={cn(
-            "mt-4 border-t pt-4",
-            theme === "dark" ? "border-white/[0.04]" : "border-[color:var(--border)]",
+            collapsed
+              ? "mt-3 border-t px-0 pt-2"
+              : "mt-4 border-t pt-3",
+            theme === "dark"
+              ? "border-white/[0.06]"
+              : "border-black/[0.08]",
           )}
         >
-          <SidebarNavButton
-            icon={Settings2}
-            label="Settings"
-            tooltip="Settings"
-            theme={theme}
+          <AccountMenu
             collapsed={collapsed}
-            active={activeView === "settings"}
-            onClick={() => onNavigate("settings")}
-          />
-          <SidebarNavButton
-            icon={CircleHelp}
-            label="Help & Docs"
-            tooltip="Help & Docs"
             theme={theme}
-            collapsed={collapsed}
-            active={activeView === "help"}
-            onClick={() => onNavigate("help")}
-            className="mt-1"
+            onNavigate={onNavigate}
           />
-
-          <div
-            className={cn(
-              "ui-card mt-4 p-3 dark:rounded-[12px]",
-              theme === "dark"
-                ? "border-white/[0.04] bg-[#12161c] shadow-none"
-                : "",
-            )}
-          >
-            <div
-              className={cn(
-                "flex items-center",
-                collapsed ? "justify-center" : "gap-3",
-              )}
-            >
-              <UserAvatar />
-              {!collapsed ? (
-                <div className="min-w-0">
-                  <p className="truncate text-[14px] font-semibold">
-                    Amaan Kadri
-                  </p>
-                  <p className="text-[12px] text-zinc-400">Free plan</p>
-                </div>
-              ) : null}
-            </div>
-          </div>
         </div>
       </div>
     </motion.aside>
   );
 }
 
-function SidebarNavButton({
-  icon: Icon,
-  label,
-  tooltip,
-  theme,
-  collapsed,
-  active,
-  onClick,
-  className,
-}: {
-  icon: React.ComponentType<{ size?: number }>;
-  label: string;
-  tooltip: string;
-  theme: Theme;
-  collapsed: boolean;
-  active: boolean;
-  onClick: () => void;
-  className?: string;
-}) {
-  const [hovered, setHovered] = useState(false);
-
-  return (
-    <motion.button
-      type="button"
-      onClick={onClick}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      whileHover="hover"
-      whileTap={{ scale: 0.985 }}
-      initial={false}
-      animate={active ? "active" : "rest"}
-        className={cn(
-          "group relative flex h-[38px] w-full items-center overflow-hidden rounded-[12px] px-3 text-[14px] font-medium outline-none",
-        collapsed ? "justify-center px-0" : "justify-start gap-3",
-          theme === "dark"
-            ? "text-zinc-300 hover:text-white"
-            : "text-slate-600 hover:text-slate-900",
-        className,
-      )}
-    >
-      <motion.span
-        variants={{
-          rest: { opacity: active ? 1 : 0, scaleX: active ? 1 : 0.97 },
-          hover: { opacity: 1, scaleX: 1 },
-          active: { opacity: 1, scaleX: 1 },
-        }}
-        transition={{ duration: 0.18 }}
-        className={cn(
-          "absolute inset-0 origin-left rounded-[14px]",
-          active
-            ? "bg-white/[0.03] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04)]"
-            : theme === "dark"
-              ? "bg-transparent"
-              : "bg-slate-100",
-        )}
-      />
-
-        {active ? (
-          <motion.span
-            layoutId="sidebar-active-indicator"
-            className="absolute left-0 top-2 bottom-2 w-[3px] rounded-full bg-violet-400/70"
-          />
-        ) : null}
-
-      <motion.span
-        variants={{
-          rest: { x: 0, scale: 1 },
-          hover: { x: 0, scale: 1.04 },
-          active: { x: 0, scale: 1.04 },
-        }}
-        className={cn(
-          "relative z-10 flex items-center justify-center",
-          collapsed ? "w-full" : "",
-          active ? "text-violet-400/80" : "",
-        )}
-      >
-        <Icon size={18} />
-      </motion.span>
-
-      <AnimatePresence initial={false}>
-        {!collapsed ? (
-          <motion.span
-            variants={{
-              rest: { x: 0 },
-              hover: { x: 2 },
-              active: { x: 2 },
-            }}
-            className="relative z-10"
-          >
-            {label}
-          </motion.span>
-        ) : null}
-      </AnimatePresence>
-
-      {collapsed && hovered ? (
-        <motion.span
-          initial={{ opacity: 0, x: -4 }}
-          animate={{ opacity: 1, x: 0 }}
-          exit={{ opacity: 0, x: -4 }}
-          transition={{ duration: 0.14 }}
-          className={cn(
-            "pointer-events-none absolute left-full top-1/2 z-20 ml-3 -translate-y-1/2 whitespace-nowrap rounded-[10px] border px-2.5 py-1 text-[12px] shadow-[0_8px_16px_rgba(0,0,0,0.1)]",
-            theme === "dark"
-              ? "border-white/[0.04] bg-[#11151b] text-white"
-              : "border-[color:var(--border)] bg-white text-slate-900",
-          )}
-        >
-          {tooltip}
-        </motion.span>
-      ) : null}
-    </motion.button>
-  );
-}
+/* ------------------------------------------------ */
+/* SIDEBAR BUTTON */
+/* ------------------------------------------------ */
 
 function SidebarAction({
   icon: Icon,
   label,
-  tooltip,
-  theme,
   collapsed,
+  theme,
+  active = false,
+  shortcut,
   onClick,
-  className,
-  accent = false,
 }: {
-  icon: React.ComponentType<{ size?: number }>;
+  icon: ComponentType<{
+    size?: number;
+  }>;
+
   label: string;
-  tooltip: string;
-  theme: Theme;
   collapsed: boolean;
+  theme: Theme;
+
+  active?: boolean;
+  shortcut?: string;
+
   onClick: () => void;
-  className?: string;
-  accent?: boolean;
 }) {
+  const [hovered, setHovered] =
+    useState(false);
+
   return (
-    <SidebarNavButton
-      icon={Icon}
-      label={label}
-      tooltip={tooltip}
-      theme={theme}
-      collapsed={collapsed}
-      active={false}
-      onClick={onClick}
+    <div className="relative">
+      <motion.button
+        type="button"
+        onMouseEnter={() =>
+          setHovered(true)
+        }
+        onMouseLeave={() =>
+          setHovered(false)
+        }
+        onClick={onClick}
+        whileHover={
+          collapsed
+            ? {
+                scale: 1.08,
+                y: -1,
+              }
+            : {
+                x: 2,
+                scale: 1.005,
+              }
+        }
+        whileTap={{
+          scale: 0.96,
+        }}
+        transition={{
+          type: "spring",
+          stiffness: 430,
+          damping: 28,
+        }}
         className={cn(
-          className,
-          accent
+          "flex h-[42px] w-full items-center rounded-[11px] text-[13px] font-normal",
+
+          collapsed
+            ? "mx-auto h-10 w-10 justify-center"
+            : "gap-3 px-3",
+
+          active
             ? theme === "dark"
-            ? "border border-white/[0.04] bg-[#12161c] text-white shadow-none hover:bg-[#171b22] hover:text-white"
-            : "bg-violet-100 text-slate-900 shadow-[0_10px_24px_rgba(139,92,246,0.08)] hover:text-slate-900"
-            : "",
+              ? "bg-[#2a2a2a] text-white"
+              : "bg-black/[0.07] text-black"
+            : theme === "dark"
+              ? "text-zinc-400 hover:bg-[#303030] hover:text-white"
+              : "text-zinc-600 hover:bg-black/[0.055] hover:text-black",
         )}
-      />
+      >
+        <motion.span
+          animate={{
+            scale: hovered ? 1.08 : 1,
+          }}
+          transition={{
+            duration: 0.14,
+          }}
+          className="flex shrink-0 items-center justify-center"
+        >
+          <Icon size={18} />
+        </motion.span>
+
+        {!collapsed ? (
+          <>
+            <span className="flex-1 text-left font-normal">
+              {label}
+            </span>
+
+            {shortcut ? (
+              <span
+                className={cn(
+                  "rounded-[6px] border px-1.5 py-0.5 text-[9px]",
+
+                  theme === "dark"
+                    ? "border-white/[0.08] text-zinc-600"
+                    : "border-black/[0.09] text-zinc-400",
+                )}
+              >
+                {shortcut}
+              </span>
+            ) : null}
+          </>
+        ) : null}
+      </motion.button>
+
+      <AnimatePresence>
+        {collapsed && hovered ? (
+          <motion.div
+            initial={{
+              opacity: 0,
+              x: -5,
+              scale: 0.97,
+            }}
+            animate={{
+              opacity: 1,
+              x: 0,
+              scale: 1,
+            }}
+            exit={{
+              opacity: 0,
+              x: -4,
+              scale: 0.97,
+            }}
+            transition={{
+              duration: 0.13,
+            }}
+            className="pointer-events-none absolute left-[48px] top-1/2 z-[300] -translate-y-1/2 whitespace-nowrap rounded-[9px] border border-white/[0.08] bg-[#303030] px-3 py-2 text-[12px] font-medium text-white shadow-xl"
+          >
+            {label}
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
   );
 }
+
+/* ------------------------------------------------ */
+/* COLLAPSED BRAND / OPEN SIDEBAR */
+/* ------------------------------------------------ */
+
+function CollapsedBrandButton({
+  theme,
+  onClick,
+}: {
+  theme: Theme;
+  onClick: () => void;
+}) {
+  const [hovered, setHovered] =
+    useState(false);
+
+  return (
+    <div className="relative">
+      <motion.button
+        type="button"
+        aria-label="Open sidebar"
+        onClick={onClick}
+        onMouseEnter={() =>
+          setHovered(true)
+        }
+        onMouseLeave={() =>
+          setHovered(false)
+        }
+        whileHover={{
+          scale: 1.09,
+          y: -1,
+        }}
+        whileTap={{
+          scale: 0.94,
+        }}
+        className={cn(
+          "flex h-10 w-10 items-center justify-center rounded-[11px]",
+          theme === "dark"
+            ? "hover:bg-[#303030]"
+            : "hover:bg-black/[0.055]",
+        )}
+      >
+        <ClawbitMark
+          className={cn(
+            "h-[22px] w-[22px]",
+            theme === "dark"
+              ? "text-white"
+              : "text-black",
+          )}
+        />
+      </motion.button>
+
+      <AnimatePresence>
+        {hovered ? (
+          <motion.div
+            initial={{
+              opacity: 0,
+              x: -4,
+              scale: 0.97,
+            }}
+            animate={{
+              opacity: 1,
+              x: 0,
+              scale: 1,
+            }}
+            exit={{
+              opacity: 0,
+              x: -3,
+              scale: 0.97,
+            }}
+            transition={{
+              duration: 0.13,
+            }}
+            className="pointer-events-none absolute left-[48px] top-1/2 z-[300] -translate-y-1/2 whitespace-nowrap rounded-[9px] border border-white/[0.08] bg-[#303030] px-3 py-2 text-[12px] font-medium text-white shadow-xl"
+          >
+            Open sidebar
+          </motion.div>
+        ) : null}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+/* ------------------------------------------------ */
+/* COLLAPSE BUTTON */
+/* ------------------------------------------------ */
+
+function SidebarIconButton({
+  icon: Icon,
+  label,
+  theme,
+  onClick,
+}: {
+  icon: ComponentType<{
+    size?: number;
+  }>;
+
+  label: string;
+  theme: Theme;
+  onClick: () => void;
+}) {
+  return (
+    <motion.button
+      type="button"
+      title={label}
+      whileHover={{
+        scale: 1.05,
+      }}
+      whileTap={{
+        scale: 0.94,
+      }}
+      onClick={onClick}
+      className={cn(
+        "flex h-10 w-10 items-center justify-center rounded-[11px]",
+
+        theme === "dark"
+          ? "text-zinc-500 hover:bg-[#2d2d2d] hover:text-white"
+          : "text-zinc-500 hover:bg-black/[0.055] hover:text-black",
+      )}
+    >
+      <Icon size={18} />
+    </motion.button>
+  );
+}
+
+/* ------------------------------------------------ */
+/* CHAT LIST */
+/* ------------------------------------------------ */
 
 function ConversationSection({
   title,
   items,
   theme,
+
   activeConversationId,
+
   onOpenConversation,
   onTogglePinConversation,
   onDeleteConversation,
+  onRenameConversation,
+
   className,
 }: {
   title: string;
+
   items: SidebarConversation[];
+
   theme: Theme;
-  activeConversationId: string | null;
-  onOpenConversation: (id: string) => void;
-  onTogglePinConversation: (id: string) => void;
-  onDeleteConversation: (id: string) => void;
+
+  activeConversationId:
+    | string
+    | null;
+
+  onOpenConversation:
+    (id: string) => void;
+
+  onTogglePinConversation:
+    (id: string) => void;
+
+  onDeleteConversation:
+    (id: string) => void;
+
+  onRenameConversation: (
+    id: string,
+    title: string,
+  ) => void;
+
   className?: string;
 }) {
+  const [
+    editingId,
+    setEditingId,
+  ] = useState<
+    string | null
+  >(null);
+
+  const [
+    draftTitle,
+    setDraftTitle,
+  ] = useState("");
+
+  if (items.length === 0) {
+    return null;
+  }
+
+  function startRename(
+    item: SidebarConversation,
+  ) {
+    setEditingId(item.id);
+    setDraftTitle(item.title);
+  }
+
+  function finishRename(
+    id: string,
+  ) {
+    const trimmed =
+      draftTitle.trim();
+
+    if (trimmed) {
+      onRenameConversation(
+        id,
+        trimmed,
+      );
+    }
+
+    setEditingId(null);
+    setDraftTitle("");
+  }
+
   return (
-    <div className={cn("space-y-2", className)}>
+    <section className={className}>
       <p
         className={cn(
-          "mb-3 text-[11px] font-semibold uppercase tracking-[0.22em]",
-          theme === "dark" ? "text-zinc-500" : "text-slate-400",
+          "mb-2 px-2 text-[11px] font-medium",
+
+          theme === "dark"
+            ? "text-zinc-500"
+            : "text-zinc-400",
         )}
       >
         {title}
       </p>
 
-      <div className="space-y-2">
-        {items.length > 0 ? (
-          items.map((item) => (
+      <div className="space-y-[2px]">
+        {items.map((item) => {
+          const active =
+            activeConversationId ===
+            item.id;
+
+          const editing =
+            editingId === item.id;
+
+          return (
             <div
               key={item.id}
               className={cn(
-                "group flex w-full items-start gap-3 rounded-[12px] border px-3 py-2.5 text-left text-[14px] transition",
-                activeConversationId === item.id
+                "group flex h-[38px] items-center rounded-[10px] px-2",
+
+                active
                   ? theme === "dark"
-                    ? "border-white/[0.04] bg-white/[0.03] text-white shadow-none"
-                    : "border-violet-500/18 bg-violet-50 text-slate-900 shadow-[0_10px_20px_rgba(139,92,246,0.06)]"
+                    ? "bg-[#2a2a2a]"
+                    : "bg-black/[0.07]"
                   : theme === "dark"
-                    ? "border-transparent text-zinc-300 hover:border-white/[0.04] hover:bg-white/[0.025] hover:text-white"
-                    : "border-transparent text-slate-600 hover:border-[color:var(--border)] hover:bg-slate-100 hover:text-slate-900",
+                    ? "hover:bg-[#2d2d2d]"
+                    : "hover:bg-black/[0.05]",
               )}
             >
-              <button
-                type="button"
-                onClick={() => onOpenConversation(item.id)}
-                className="flex min-w-0 flex-1 items-start gap-3 text-left"
-              >
-                <div
+              {editing ? (
+                <input
+                  autoFocus
+                  value={draftTitle}
+                  onChange={(event) =>
+                    setDraftTitle(
+                      event.target.value,
+                    )
+                  }
+                  onBlur={() =>
+                    finishRename(
+                      item.id,
+                    )
+                  }
+                  onKeyDown={(event) => {
+                    if (
+                      event.key ===
+                      "Enter"
+                    ) {
+                      finishRename(
+                        item.id,
+                      );
+                    }
+
+                    if (
+                      event.key ===
+                      "Escape"
+                    ) {
+                      setEditingId(
+                        null,
+                      );
+                    }
+                  }}
                   className={cn(
-                    "mt-0.5 shrink-0 rounded-[12px] p-2",
-                    activeConversationId === item.id
-                      ? "bg-white/[0.04] text-violet-400/80"
-                      : theme === "dark"
-                        ? "bg-[#12161c] text-violet-400/80"
-                        : "bg-[color:var(--accent-hover)] text-violet-500",
+                    "min-w-0 flex-1 rounded-[7px] border px-2 py-1 text-[13px] font-normal outline-none",
+
+                    theme === "dark"
+                      ? "border-white/[0.12] bg-[#202020] text-white"
+                      : "border-black/[0.12] bg-white text-black",
+                  )}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    onOpenConversation(
+                      item.id,
+                    )
+                  }
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-left text-[13px] font-normal",
+
+                    active
+                      ? theme ===
+                        "dark"
+                        ? "text-white"
+                        : "text-black"
+                      : theme ===
+                          "dark"
+                        ? "text-zinc-300"
+                        : "text-zinc-700",
                   )}
                 >
-                  <MessageSquare size={14} />
-                </div>
+                  {item.title}
+                </button>
+              )}
 
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start gap-2">
-                    <p className="truncate text-[14px] font-medium leading-5">
-                      {item.title}
-                    </p>
-                    {item.pinned ? (
-                      <Pin size={14} className="mt-0.5 shrink-0 text-violet-400" />
-                    ) : null}
-                  </div>
-                  <p
-                    className={cn(
-                      "mt-1 line-clamp-2 text-[13px] leading-5",
-                      theme === "dark" ? "text-zinc-500" : "text-slate-500",
-                    )}
-                  >
-                    {item.preview}
-                  </p>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onTogglePinConversation(item.id);
-                }}
-                className={cn(
-                  "mt-0.5 rounded-[12px] p-1.5 transition",
-                  theme === "dark"
-                    ? "text-zinc-500 hover:bg-white/[0.025] hover:text-white"
-                    : "text-slate-400 hover:bg-slate-100 hover:text-slate-900",
-                )}
-                aria-label={item.pinned ? "Unpin chat" : "Pin chat"}
-              >
-                <Pin size={14} className={item.pinned ? "text-violet-400" : ""} />
-              </button>
-
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onDeleteConversation(item.id);
-                }}
-                className={cn(
-                  "mt-0.5 rounded-[12px] p-1.5 transition",
-                  theme === "dark"
-                    ? "text-zinc-500 hover:bg-white/[0.03] hover:text-white"
-                    : "text-slate-400 hover:bg-slate-100 hover:text-slate-900",
-                )}
-                aria-label="Delete chat"
-              >
-                <Trash2 size={14} />
-              </button>
+              {!editing ? (
+                <ConversationMenu
+                  item={item}
+                  theme={theme}
+                  onRename={() =>
+                    startRename(item)
+                  }
+                  onTogglePin={() =>
+                    onTogglePinConversation(
+                      item.id,
+                    )
+                  }
+                  onDelete={() =>
+                    onDeleteConversation(
+                      item.id,
+                    )
+                  }
+                />
+              ) : null}
             </div>
-          ))
-        ) : (
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+/* ------------------------------------------------ */
+/* THREE DOT CHAT MENU */
+/* ------------------------------------------------ */
+
+function ConversationMenu({
+  item,
+  theme,
+  onRename,
+  onTogglePin,
+  onDelete,
+}: {
+  item: SidebarConversation;
+  theme: Theme;
+
+  onRename: () => void;
+  onTogglePin: () => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] =
+    useState(false);
+
+  async function shareConversation() {
+    const url =
+      window.location.href;
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: item.title,
+          text: item.preview,
+          url,
+        });
+
+        return;
+      }
+
+      await navigator.clipboard.writeText(
+        url,
+      );
+    } catch {
+      // User cancelled sharing.
+    }
+  }
+
+  return (
+    <DropdownMenu.Root
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <DropdownMenu.Trigger
+        asChild
+      >
+        <button
+          type="button"
+          aria-label="Conversation options"
+          className={cn(
+            "ml-1 h-7 w-7 shrink-0 items-center justify-center rounded-[7px]",
+            open
+              ? "flex"
+              : "hidden group-hover:flex",
+
+            theme === "dark"
+              ? "text-zinc-500 hover:bg-white/[0.08] hover:text-white"
+              : "text-zinc-400 hover:bg-black/[0.07] hover:text-black",
+          )}
+        >
+          <MoreHorizontal
+            size={17}
+          />
+        </button>
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="right"
+          align="center"
+          sideOffset={8}
+          collisionPadding={10}
+          className={cn(
+            "z-[400] w-[210px] rounded-[16px] border p-1.5 shadow-[0_24px_70px_rgba(0,0,0,0.6)]",
+
+            theme === "dark"
+              ? "border-white/[0.08] bg-[#2b2b2b] text-white"
+              : "border-black/[0.10] bg-white text-black",
+          )}
+        >
+          <ConversationMenuItem
+            icon={Share2}
+            label="Share conversation"
+            theme={theme}
+            onSelect={() =>
+              void shareConversation()
+            }
+          />
+
+          <ConversationMenuItem
+            icon={Pin}
+            label={
+              item.pinned
+                ? "Unpin"
+                : "Pin"
+            }
+            theme={theme}
+            onSelect={onTogglePin}
+          />
+
+          <ConversationMenuItem
+            icon={Pencil}
+            label="Rename"
+            theme={theme}
+            onSelect={onRename}
+          />
+
           <div
             className={cn(
-              "rounded-[14px] border px-3 py-4 text-[13px]",
+              "my-1 border-t",
               theme === "dark"
-                ? "border-white/[0.04] bg-[#11151b] text-zinc-500"
-                : "border-[color:var(--border)] bg-white text-slate-500",
+                ? "border-white/[0.08]"
+                : "border-black/[0.08]",
             )}
-          >
-            No {title.toLowerCase()} chats yet.
+          />
+
+          <ConversationMenuItem
+            icon={Trash2}
+            label="Delete"
+            theme={theme}
+            destructive
+            onSelect={onDelete}
+          />
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function ConversationMenuItem({
+  icon: Icon,
+  label,
+  theme,
+  destructive = false,
+  onSelect,
+}: {
+  icon: ComponentType<{
+    size?: number;
+  }>;
+
+  label: string;
+  theme: Theme;
+  destructive?: boolean;
+
+  onSelect: () => void;
+}) {
+  return (
+    <DropdownMenu.Item
+      onSelect={onSelect}
+      className={cn(
+        "flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] outline-none",
+
+        destructive
+          ? "text-red-400 hover:bg-red-500/[0.08] focus:bg-red-500/[0.08]"
+          : theme === "dark"
+            ? "text-zinc-200 hover:bg-white/[0.07] focus:bg-white/[0.07]"
+            : "text-zinc-700 hover:bg-black/[0.05] focus:bg-black/[0.05]",
+      )}
+    >
+      <Icon size={16} />
+
+      {label}
+    </DropdownMenu.Item>
+  );
+}
+
+/* ------------------------------------------------ */
+/* ACCOUNT */
+/* ------------------------------------------------ */
+
+function AccountMenu({
+  collapsed,
+  theme,
+  onNavigate,
+}: {
+  collapsed: boolean;
+  theme: Theme;
+
+  onNavigate:
+    (view: AppView) => void;
+}) {
+  const [open, setOpen] =
+    useState(false);
+
+  return (
+    <DropdownMenu.Root
+      open={open}
+      onOpenChange={setOpen}
+    >
+      <DropdownMenu.Trigger
+        asChild
+      >
+        <button
+          type="button"
+          className={cn(
+            "mt-1 flex w-full items-center rounded-[12px]",
+
+            collapsed
+              ? "mx-auto h-10 w-10 justify-center"
+              : "min-h-[58px] gap-3 px-2.5",
+
+            open
+              ? theme === "dark"
+                ? "bg-[#2d2d2d]"
+                : "bg-black/[0.06]"
+              : theme === "dark"
+                ? "hover:bg-[#2d2d2d]"
+                : "hover:bg-black/[0.05]",
+          )}
+        >
+          <UserAvatar />
+
+          {!collapsed ? (
+            <>
+              <div className="min-w-0 flex-1 text-left">
+                <p className="truncate text-[13px] font-medium">
+                  Hassan Kadri
+                </p>
+
+                <p className="mt-0.5 text-[10px] text-zinc-500">
+                  Personal
+                </p>
+              </div>
+
+              <MoreHorizontal
+                size={16}
+                className="text-zinc-500"
+              />
+            </>
+          ) : null}
+        </button>
+      </DropdownMenu.Trigger>
+
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          side="top"
+          align="center"
+          sideOffset={8}
+          className={cn(
+            "z-[400] w-[270px] rounded-[18px] border p-2 shadow-[0_24px_80px_rgba(0,0,0,0.7)]",
+
+            theme === "dark"
+              ? "border-white/[0.08] bg-[#2b2b2b] text-white"
+              : "border-black/[0.10] bg-white text-black",
+          )}
+        >
+          <div className="flex items-center gap-3 px-2.5 py-2.5">
+            <UserAvatar />
+
+            <div className="min-w-0">
+              <p className="truncate text-[13px] font-medium">
+                Hassan Kadri
+              </p>
+
+              <p className="mt-0.5 text-[11px] text-zinc-500">
+                Personal
+              </p>
+            </div>
           </div>
-        )}
-      </div>
-    </div>
+
+          <MenuDivider
+            theme={theme}
+          />
+
+          <AccountMenuItem
+            icon={SlidersHorizontal}
+            label="Personalization"
+            theme={theme}
+            onSelect={() =>
+              onNavigate(
+                "customize",
+              )
+            }
+          />
+
+          <AccountMenuItem
+            icon={UserRound}
+            label="Profile"
+            theme={theme}
+            onSelect={() =>
+              onNavigate(
+                "customize",
+              )
+            }
+          />
+
+          <AccountMenuItem
+            icon={Settings2}
+            label="Settings"
+            theme={theme}
+            onSelect={() =>
+              onNavigate(
+                "settings",
+              )
+            }
+          />
+
+          <MenuDivider
+            theme={theme}
+          />
+
+          <AccountMenuItem
+            icon={CircleHelp}
+            label="Help"
+            theme={theme}
+            onSelect={() =>
+              onNavigate(
+                "help",
+              )
+            }
+          />
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+}
+
+function AccountMenuItem({
+  icon: Icon,
+  label,
+  theme,
+  onSelect,
+}: {
+  icon: ComponentType<{
+    size?: number;
+  }>;
+
+  label: string;
+  theme: Theme;
+  onSelect: () => void;
+}) {
+  return (
+    <DropdownMenu.Item
+      onSelect={onSelect}
+      className={cn(
+        "flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] outline-none",
+
+        theme === "dark"
+          ? "text-zinc-200 hover:bg-white/[0.07] focus:bg-white/[0.07]"
+          : "text-zinc-700 hover:bg-black/[0.05] focus:bg-black/[0.05]",
+      )}
+    >
+      <Icon size={16} />
+
+      {label}
+    </DropdownMenu.Item>
+  );
+}
+
+function MenuDivider({
+  theme,
+}: {
+  theme: Theme;
+}) {
+  return (
+    <div
+      className={cn(
+        "my-1.5 border-t",
+
+        theme === "dark"
+          ? "border-white/[0.08]"
+          : "border-black/[0.08]",
+      )}
+    />
   );
 }
