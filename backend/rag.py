@@ -429,36 +429,61 @@ def retrieve_from_rag(
     thread_id: str,
     attachment_ids: list[str] | None = None,
     k: int = 4,
+    inspector: dict | None = None,
 ) -> str:
-    records = get_attachment_records(thread_id, attachment_ids)
+    records = get_attachment_records(
+        thread_id,
+        attachment_ids,
+    )
 
     document_attachment_ids = [
         record["attachment_id"]
         for record in records
-        if record.get("kind") == "document" and record.get("attachment_id")
+        if (
+            record.get("kind") == "document"
+            and record.get("attachment_id")
+        )
     ]
+
+    search_limit = max(k * 4, 12)
+
+    vector_docs = []
+    bm25_docs = []
+    docs = []
+
+    retrieval_error = False
 
     try:
         if attachment_ids and not document_attachment_ids:
             vector_docs = []
             bm25_docs = []
+
         else:
-            search_filter = {"thread_id": thread_id}
+            search_filter = {
+                "thread_id": thread_id
+            }
 
             if document_attachment_ids:
                 if len(document_attachment_ids) == 1:
-                    attachment_filter = document_attachment_ids[0]
+                    attachment_filter = (
+                        document_attachment_ids[0]
+                    )
                 else:
-                    attachment_filter = {"$in": document_attachment_ids}
+                    attachment_filter = {
+                        "$in": document_attachment_ids
+                    }
 
                 search_filter = {
                     "$and": [
-                        {"thread_id": thread_id},
-                        {"attachment_id": attachment_filter},
+                        {
+                            "thread_id": thread_id
+                        },
+                        {
+                            "attachment_id":
+                                attachment_filter
+                        },
                     ]
                 }
-
-            search_limit = max(k * 4, 12)
 
             vector_docs = vectorstore.similarity_search(
                 query,
@@ -476,11 +501,29 @@ def retrieve_from_rag(
         docs = _merge_hybrid_results(
             vector_docs,
             bm25_docs,
-            limit=max(k * 4, 12),
+            limit=search_limit,
         )
 
     except Exception:
         docs = []
+        retrieval_error = True
+
+    if inspector is not None:
+        inspector.update(
+            {
+                "search_limit": search_limit,
+                "vector_candidates": len(
+                    vector_docs
+                ),
+                "bm25_candidates": len(
+                    bm25_docs
+                ),
+                "hybrid_candidates": len(
+                    docs
+                ),
+                "retrieval_error": retrieval_error,
+            }
+        )
 
     unique_docs = []
     seen_chunks = set()
@@ -498,27 +541,52 @@ def retrieve_from_rag(
         seen_chunks.add(chunk_key)
         unique_docs.append(doc)
 
+    if inspector is not None:
+        inspector["after_deduplication"] = len(
+            unique_docs
+        )
+
+    reranking_completed = False
+
     try:
-            unique_docs = _rerank_documents(
-        query,
-        unique_docs,
-        limit=max(k * 4, 12),
-    )
+        unique_docs = _rerank_documents(
+            query,
+            unique_docs,
+            limit=search_limit,
+        )
+
+        reranking_completed = True
+
     except Exception:
         pass
+
+    if inspector is not None:
+        inspector.update(
+            {
+                "reranking_completed":
+                    reranking_completed,
+                "reranked_candidates": len(
+                    unique_docs
+                ),
+            }
+        )
 
     selected_docs = []
     selected_keys = set()
     seen_attachments = set()
 
-    # First pass: prefer one relevant chunk from each document.
+    # First pass:
+    # Prefer one relevant chunk from each document.
     for doc in unique_docs:
-        attachment_id = doc.metadata.get("attachment_id")
+        attachment_id = doc.metadata.get(
+            "attachment_id"
+        )
 
         if attachment_id in seen_attachments:
             continue
 
         selected_docs.append(doc)
+
         selected_keys.add(
             (
                 attachment_id,
@@ -526,16 +594,20 @@ def retrieve_from_rag(
                 doc.page_content,
             )
         )
+
         seen_attachments.add(attachment_id)
 
         if len(selected_docs) >= k:
             break
 
-    # Second pass: fill remaining slots with the next best chunks.
+    # Second pass:
+    # Fill remaining slots with next best chunks.
     if len(selected_docs) < k:
         for doc in unique_docs:
             chunk_key = (
-                doc.metadata.get("attachment_id"),
+                doc.metadata.get(
+                    "attachment_id"
+                ),
                 doc.metadata.get("page"),
                 doc.page_content,
             )
@@ -549,31 +621,95 @@ def retrieve_from_rag(
             if len(selected_docs) >= k:
                 break
 
+    if inspector is not None:
+        inspector["selected_chunks"] = len(
+            selected_docs
+        )
+
     if not selected_docs:
         previews = [
-            f"[Source {index}: {record.get('name', 'uploaded document')}]\n{record.get('preview')}"
-            for index, record in enumerate(records, start=1)
-            if record.get("kind") == "document" and record.get("preview")
+            (
+                f"[Source {index}: "
+                f"{record.get('name', 'uploaded document')}]\n"
+                f"{record.get('preview')}"
+            )
+            for index, record in enumerate(
+                records,
+                start=1,
+            )
+            if (
+                record.get("kind") == "document"
+                and record.get("preview")
+            )
         ]
 
         if previews:
-            return "\n\n".join(previews[:k])
+            if inspector is not None:
+                inspector["fallback_used"] = True
+                inspector["sources"] = [
+                    {
+                        "file": record.get(
+                            "name",
+                            "uploaded document",
+                        ),
+                        "page": None,
+                    }
+                    for record in records
+                    if (
+                        record.get("kind")
+                        == "document"
+                        and record.get("preview")
+                    )
+                ][:k]
 
-        return "No relevant uploaded document content found."
+            return "\n\n".join(
+                previews[:k]
+            )
+
+        if inspector is not None:
+            inspector["fallback_used"] = False
+            inspector["sources"] = []
+
+        return (
+            "No relevant uploaded document "
+            "content found."
+        )
 
     results = []
+    inspector_sources = []
 
-    for i, doc in enumerate(selected_docs, start=1):
-        source = doc.metadata.get("source", "uploaded document")
+    for i, doc in enumerate(
+        selected_docs,
+        start=1,
+    ):
+        source = doc.metadata.get(
+            "source",
+            "uploaded document",
+        )
+
         page = doc.metadata.get("page")
 
         if page:
-            source_label = f"{source} - Page {page}"
+            source_label = (
+                f"{source} - Page {page}"
+            )
         else:
             source_label = source
 
         results.append(
-            f"[Source {i}: {source_label}]\n{doc.page_content}"
+            f"[Source {i}: {source_label}]\n"
+            f"{doc.page_content}"
         )
+
+        inspector_sources.append(
+            {
+                "file": source,
+                "page": page,
+            }
+        )
+
+    if inspector is not None:
+        inspector["fallback_used"] = False
+        inspector["sources"] = inspector_sources
 
     return "\n\n".join(results)

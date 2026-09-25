@@ -19,11 +19,23 @@ ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(ENV_PATH)
 
 
-def _get_request_context(runtime: ToolRuntime) -> tuple[str, list[str]]:
-    configurable = runtime.config.get("configurable", {})
+def _get_request_context(
+    runtime: ToolRuntime,
+) -> tuple[str, list[str]]:
+    configurable = runtime.config.get(
+        "configurable",
+        {},
+    )
 
-    thread_id = configurable.get("thread_id", "default")
-    attachment_ids = configurable.get("attachment_ids", [])
+    thread_id = configurable.get(
+        "thread_id",
+        "default",
+    )
+
+    attachment_ids = configurable.get(
+        "attachment_ids",
+        [],
+    )
 
     return thread_id, attachment_ids
 
@@ -183,23 +195,50 @@ def _rewrite_document_query(
     query: str,
     runtime: ToolRuntime,
 ) -> str:
-    configurable = runtime.config.get("configurable", {})
+    configurable = runtime.config.get(
+        "configurable",
+        {},
+    )
+
+    user_query = configurable.get(
+        "user_query",
+        query,
+    )
+
     model_name = normalize_model_name(
         configurable.get("model")
     )
 
-    messages = runtime.state.get("messages", [])
+    messages = runtime.state.get(
+        "messages",
+        [],
+    )
 
     conversation_parts = []
 
     for message in messages[-6:]:
-        message_type = getattr(message, "type", "")
-        content = getattr(message, "content", "")
+        message_type = getattr(
+            message,
+            "type",
+            "",
+        )
 
-        if message_type not in {"human", "ai"}:
+        content = getattr(
+            message,
+            "content",
+            "",
+        )
+
+        if message_type not in {
+            "human",
+            "ai",
+        }:
             continue
 
-        if not isinstance(content, str) or not content.strip():
+        if (
+            not isinstance(content, str)
+            or not content.strip()
+        ):
             continue
 
         role = (
@@ -212,22 +251,28 @@ def _rewrite_document_query(
             f"{role}: {content}"
         )
 
-    conversation = "\n".join(conversation_parts)
+    conversation = "\n".join(
+        conversation_parts
+    )
 
     prompt = f"""
-Rewrite the user's document search query so it can be understood without needing the previous conversation.
+Rewrite the document search query into one clear, standalone search query.
 
-Rules:
+Important:
+- The agent may have shortened or paraphrased the tool query.
+- Preserve important details from the user's real request.
+- Do not remove names, filenames, technical terms, numbers, constraints, or the subject being asked about.
+- Use conversation context only when needed.
 - Return only the rewritten search query.
 - Do not answer the question.
-- Preserve exact names, codes, IDs, technical terms, numbers, and filenames.
-- Use conversation context only when needed.
-- If the query is already clear and standalone, return it unchanged.
+
+User's real request:
+{user_query}
 
 Conversation:
 {conversation}
 
-Current search query:
+Tool query:
 {query}
 """
 
@@ -238,6 +283,7 @@ Current search query:
         )
 
         response = model.invoke(prompt)
+
         rewritten_query = getattr(
             response,
             "content",
@@ -256,11 +302,11 @@ Current search query:
     return query
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def search_uploaded_documents(
     query: str,
     runtime: ToolRuntime,
-) -> str:
+) -> tuple[str, dict]:
     """
     Search uploaded documents for relevant information.
     Use this when the user asks about uploaded PDFs, DOCX, TXT, notes, files, or documents.
@@ -274,11 +320,20 @@ def search_uploaded_documents(
         runtime,
     )
 
-    return retrieve_from_rag(
+    inspector = {
+        "rag_used": True,
+        "tool_query": query,
+        "rewritten_query": rewritten_query,
+    }
+
+    content = retrieve_from_rag(
         query=rewritten_query,
         thread_id=thread_id,
         attachment_ids=attachment_ids or None,
+        inspector=inspector,
     )
+
+    return content, inspector
 
 
 @tool

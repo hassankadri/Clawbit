@@ -1,20 +1,19 @@
 import base64
 from contextlib import asynccontextmanager
 from pathlib import Path
+import uuid
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-import uuid
-
 from agent import close_agent_resources, get_agent
 from rag import (
+    SUPPORTED_DOCUMENT_SUFFIXES,
+    SUPPORTED_IMAGE_SUFFIXES,
     get_attachment_records,
     read_file_text,
     save_uploaded_file,
-    SUPPORTED_DOCUMENT_SUFFIXES,
-    SUPPORTED_IMAGE_SUFFIXES,
 )
 
 
@@ -75,6 +74,7 @@ class UploadResponse(BaseModel):
 class ChatResponse(BaseModel):
     response: str
     thread_id: str
+    inspector: dict | None = None
 
 
 def extract_text_content(message) -> str:
@@ -120,11 +120,38 @@ def _build_user_message(
                 "text": normalized_text,
             }
         )
+
     elif attachments:
         text_blocks.append(
             {
                 "type": "text",
-                "text": "Use the attached files to answer the user's request.",
+                "text": (
+                    "Use the attached files to answer "
+                    "the user's request."
+                ),
+            }
+        )
+
+    document_names = [
+        attachment.get(
+            "name",
+            "uploaded document",
+        )
+        for attachment in attachments
+        if attachment.get("kind") == "document"
+    ]
+
+    if document_names:
+        text_blocks.append(
+            {
+                "type": "text",
+                "text": (
+                    "Uploaded documents are available: "
+                    + ", ".join(document_names)
+                    + ". Use the "
+                    "search_uploaded_documents tool "
+                    "to retrieve information from them."
+                ),
             }
         )
 
@@ -143,57 +170,18 @@ def _build_user_message(
             continue
 
         path = Path(path_value)
-        mime_type = attachment.get("mime_type") or "image/png"
+        mime_type = (
+            attachment.get("mime_type")
+            or "image/png"
+        )
 
         image_blocks.append(
             {
                 "type": "image",
-                "base64": base64.b64encode(path.read_bytes()).decode("utf-8"),
+                "base64": base64.b64encode(
+                    path.read_bytes()
+                ).decode("utf-8"),
                 "mime_type": mime_type,
-            }
-        )
-
-    document_context = []
-
-    if attachments:
-        document_context_text = []
-
-        for attachment in attachments:
-            if attachment.get("kind") != "document":
-                continue
-
-            path_value = attachment.get("path")
-            document_text = ""
-
-            if path_value:
-                try:
-                    document_text = read_file_text(path_value).strip()
-                except Exception:
-                    document_text = ""
-
-            preview = document_text[:12000] or attachment.get("preview")
-
-            if preview:
-                document_context_text.append(
-                    f"Document: {attachment.get('name', 'uploaded document')}\n{preview}"
-                )
-
-        if document_context_text:
-            document_context.append(
-                {
-                    "type": "text",
-                    "text": (
-                        "Uploaded document context:\n"
-                        + "\n\n".join(document_context_text)
-                    ),
-                }
-            )
-
-    if document_context:
-        text_blocks.append(
-            {
-                "type": "text",
-                "text": document_context[0]["text"],
             }
         )
 
@@ -208,12 +196,17 @@ def home():
     }
 
 
-@app.post("/attachments/upload", response_model=UploadResponse)
+@app.post(
+    "/attachments/upload",
+    response_model=UploadResponse,
+)
 async def upload_attachment(
     thread_id: str = Form(...),
     file: UploadFile = File(...),
 ):
-    suffix = Path(file.filename or "").suffix.lower()
+    suffix = Path(
+        file.filename or ""
+    ).suffix.lower()
 
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
         suffix = UPLOAD_SUFFIX_BY_MIME.get(
@@ -224,21 +217,40 @@ async def upload_attachment(
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type. Upload PDF, DOCX, TXT, MD, CSV, or images.",
+            detail=(
+                "Unsupported file type. "
+                "Upload PDF, DOCX, TXT, MD, CSV, or images."
+            ),
         )
 
-    upload_dir = Path(__file__).resolve().parent / "uploads" / thread_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir = (
+        Path(__file__).resolve().parent
+        / "uploads"
+        / thread_id
+    )
 
-    safe_name = Path(file.filename or "upload").name
+    upload_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    safe_name = Path(
+        file.filename or "upload"
+    ).name
 
     if (
-        Path(safe_name).suffix.lower() not in SUPPORTED_UPLOAD_SUFFIXES
+        Path(safe_name).suffix.lower()
+        not in SUPPORTED_UPLOAD_SUFFIXES
         and suffix
     ):
-        safe_name = f"{Path(safe_name).stem}{suffix}"
+        safe_name = (
+            f"{Path(safe_name).stem}{suffix}"
+        )
 
-    attachment_path = upload_dir / f"{uuid.uuid4().hex}_{safe_name}"
+    attachment_path = (
+        upload_dir
+        / f"{uuid.uuid4().hex}_{safe_name}"
+    )
 
     content = await file.read()
     attachment_path.write_bytes(content)
@@ -247,11 +259,17 @@ async def upload_attachment(
         record = save_uploaded_file(
             str(attachment_path),
             thread_id=thread_id,
-            original_name=file.filename or attachment_path.name,
+            original_name=(
+                file.filename
+                or attachment_path.name
+            ),
         )
+
     except Exception as exc:
         if attachment_path.exists():
-            attachment_path.unlink(missing_ok=True)
+            attachment_path.unlink(
+                missing_ok=True
+            )
 
         raise HTTPException(
             status_code=400,
@@ -268,10 +286,25 @@ async def upload_attachment(
     )
 
 
-@app.post("/chat", response_model=ChatResponse)
+@app.post(
+    "/chat",
+    response_model=ChatResponse,
+)
 async def chat(req: ChatRequest):
-    thread_id = req.thread_id or str(uuid.uuid4())
-    attachment_ids = req.attachment_ids or []
+    thread_id = (
+        req.thread_id
+        or str(uuid.uuid4())
+    )
+
+    attachment_ids = (
+        req.attachment_ids
+        or []
+    )
+
+    inspector = {
+        "rag_used": False,
+        "user_query": req.message,
+    }
 
     attachments = get_attachment_records(
         thread_id,
@@ -288,6 +321,7 @@ async def chat(req: ChatRequest):
                 "Please choose a vision-capable model."
             ),
             thread_id=thread_id,
+            inspector=inspector,
         )
 
     agent = await get_agent(
@@ -317,21 +351,59 @@ async def chat(req: ChatRequest):
                 "attachment_ids": attachment_ids,
                 "model": req.model,
                 "mode": req.mode,
+                "user_query": req.message,
             }
         },
     )
 
     if isinstance(result, dict):
-        messages = result.get("messages", [])
+        messages = result.get(
+            "messages",
+            [],
+        )
 
         if messages:
-            response = extract_text_content(messages[-1])
+            response = extract_text_content(
+                messages[-1]
+            )
         else:
             response = ""
+
+        for message in reversed(messages):
+            message_type = getattr(
+                message,
+                "type",
+                "",
+            )
+
+            tool_name = getattr(
+                message,
+                "name",
+                "",
+            )
+
+            artifact = getattr(
+                message,
+                "artifact",
+                None,
+            )
+
+            if (
+                message_type == "tool"
+                and tool_name
+                == "search_uploaded_documents"
+                and isinstance(artifact, dict)
+            ):
+                inspector.update(artifact)
+                break
+
     else:
-        response = extract_text_content(result)
+        response = extract_text_content(
+            result
+        )
 
     return ChatResponse(
         response=response,
         thread_id=thread_id,
+        inspector=inspector,
     )
