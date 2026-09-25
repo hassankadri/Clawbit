@@ -1,4 +1,5 @@
 import base64
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -7,7 +8,7 @@ from pydantic import BaseModel, Field
 
 import uuid
 
-from agent import get_agent
+from agent import close_agent_resources, get_agent
 from rag import (
     get_attachment_records,
     read_file_text,
@@ -31,7 +32,15 @@ UPLOAD_SUFFIX_BY_MIME = {
 }
 
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        yield
+    finally:
+        await close_agent_resources()
+
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -80,8 +89,10 @@ def extract_text_content(message) -> str:
         for item in content:
             if isinstance(item, dict):
                 text = item.get("text")
+
                 if text:
                     parts.append(text)
+
             elif isinstance(item, str):
                 parts.append(item)
 
@@ -100,7 +111,6 @@ def _build_user_message(
     model_name: str,
 ):
     text_blocks: list[dict] = []
-
     normalized_text = message_text.strip()
 
     if normalized_text:
@@ -172,8 +182,10 @@ def _build_user_message(
             document_context.append(
                 {
                     "type": "text",
-                    "text": "Uploaded document context:\n"
-                    + "\n\n".join(document_context_text),
+                    "text": (
+                        "Uploaded document context:\n"
+                        + "\n\n".join(document_context_text)
+                    ),
                 }
             )
 
@@ -278,13 +290,13 @@ async def chat(req: ChatRequest):
             thread_id=thread_id,
         )
 
-    agent = get_agent(
+    agent = await get_agent(
         req.model,
         req.mode,
     )
 
     print("Agent loaded successfully")
-    print("Calling agent.invoke...")
+    print("Calling agent.ainvoke...")
 
     user_message = {
         "role": "user",
@@ -295,7 +307,7 @@ async def chat(req: ChatRequest):
         ),
     }
 
-    result = agent.invoke(
+    result = await agent.ainvoke(
         {
             "messages": [user_message],
         },

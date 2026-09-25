@@ -1,5 +1,5 @@
 import os
-import sqlite3
+import aiosqlite
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -30,10 +30,14 @@ from models import build_chat_model, normalize_model_name
 from langchain_core.messages import SystemMessage
 from langgraph.graph import StateGraph, START, MessagesState
 from langgraph.prebuilt import ToolNode, tools_condition
-from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from tool import tools, research_tools
+from mcp_client import load_mcp_tools
 
-Path("data").mkdir(exist_ok=True)
+BACKEND_DIR = Path(__file__).resolve().parent
+DATA_DIR = BACKEND_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+CHECKPOINT_DB_PATH = DATA_DIR / "langgraph_checkpoints.sqlite"
 
 SYSTEM_PROMPT = """
 You are Clawbit, an intelligent, reliable, and agentic AI assistant.
@@ -206,10 +210,10 @@ Always use for:
 Do not perform complex calculations mentally.
 
 ────────────────────────────────────────
-6. Future MCP Tools
+6. MCP Tools
 ────────────────────────────────────────
 
-Additional tools may become available through MCP servers.
+Additional tools can be loaded dynamically through MCP servers.
 
 Examples include:
 
@@ -353,7 +357,32 @@ def normalize_agent_mode(mode: str | None) -> str:
     return mode
 
 
-def build_agent(model_name: str, mode: str = "normal"):
+def _merge_tools(base_tools: list, extra_tools: list) -> list:
+    """
+    Merge built-in and MCP tools while avoiding duplicate tool names.
+    """
+    merged = []
+    seen_names = set()
+
+    for tool_item in [*base_tools, *extra_tools]:
+        tool_name = getattr(tool_item, "name", None)
+
+        if tool_name and tool_name in seen_names:
+            continue
+
+        if tool_name:
+            seen_names.add(tool_name)
+
+        merged.append(tool_item)
+
+    return merged
+
+
+async def build_agent(
+    model_name: str,
+    mode: str = "normal",
+    mcp_tools: list | None = None,
+):
     """
     Build one LangGraph agent for the selected model and mode.
     """
@@ -373,15 +402,20 @@ def build_agent(model_name: str, mode: str = "normal"):
         max_tokens=research_max_tokens,
     )
 
-    active_tools = (
+    base_tools = (
         research_tools
         if selected_mode == "research"
         else tools
     )
 
+    active_tools = _merge_tools(
+        base_tools,
+        mcp_tools or [],
+    )
+
     llm_with_tools = llm.bind_tools(active_tools)
 
-    def chatbot_node(state: MessagesState):
+    async def chatbot_node(state: MessagesState):
         if selected_mode == "research":
             system_prompt = RESEARCH_MODE_PROMPT
         else:
@@ -396,7 +430,7 @@ def build_agent(model_name: str, mode: str = "normal"):
             SystemMessage(content=system_prompt)
         ] + conversation_messages
 
-        response = llm_with_tools.invoke(messages)
+        response = await llm_with_tools.ainvoke(messages)
 
         return {"messages": [response]}
 
@@ -411,26 +445,29 @@ def build_agent(model_name: str, mode: str = "normal"):
     workflow.add_conditional_edges("chatbot", tools_condition)
     workflow.add_edge("tools", "chatbot")
 
-    conn = sqlite3.connect(
-        "data/langgraph_checkpoints.sqlite",
-        check_same_thread=False,
+    conn = await aiosqlite.connect(
+        str(CHECKPOINT_DB_PATH)
     )
+    _CHECKPOINT_CONNECTIONS.append(conn)
 
-    checkpointer = SqliteSaver(conn)
+    checkpointer = AsyncSqliteSaver(conn)
 
     return workflow.compile(checkpointer=checkpointer)
 
 
 _AGENT_CACHE = {}
+_CHECKPOINT_CONNECTIONS = []
 
 
-def get_agent(
+async def get_agent(
     model_name: str | None = None,
     mode: str = "normal",
 ):
     """
-    Return cached LangGraph agent for the selected model and mode.
-    If not created yet, create it once and reuse it.
+    Return a cached LangGraph agent for the selected model and mode.
+
+    MCP tools are discovered asynchronously the first time an agent
+    configuration is created, then reused through the agent cache.
     """
 
     selected_model = normalize_model_name(model_name)
@@ -442,9 +479,31 @@ def get_agent(
     )
 
     if cache_key not in _AGENT_CACHE:
-        _AGENT_CACHE[cache_key] = build_agent(
+        try:
+            mcp_tools = await load_mcp_tools()
+        except Exception as exc:
+            print(f"MCP tools unavailable: {exc}")
+            mcp_tools = []
+
+        _AGENT_CACHE[cache_key] = await build_agent(
             selected_model,
             selected_mode,
+            mcp_tools=mcp_tools,
         )
 
     return _AGENT_CACHE[cache_key]
+
+async def close_agent_resources() -> None:
+    """
+    Close long-lived async resources used by cached agents.
+    Call this when the application is shutting down.
+    """
+    while _CHECKPOINT_CONNECTIONS:
+        conn = _CHECKPOINT_CONNECTIONS.pop()
+
+        try:
+            await conn.close()
+        except Exception:
+            pass
+
+    _AGENT_CACHE.clear()
