@@ -1,0 +1,50 @@
+[
+  {
+    "name": "atlas_database",
+    "question": "What database does Project Atlas use?",
+    "thread_id": "eval-atlas",
+    "attachment_id": "atlas-doc",
+    "source": "atlas.txt",
+    "vector_candidates": [
+      "Project Atlas uses a blue dashboard theme.",
+      "Project Atlas stores customer orders in PostgreSQL."
+    ],
+    "bm25_candidates": [
+      "PostgreSQL is the database used by Project Atlas.",
+      "Project Atlas uses a blue dashboard theme."
+    ],
+    "expected_keyword": "postgresql"
+  },
+  {
+    "name": "nova_database",
+    "question": "Which database is used by Project Nova?",
+    "thread_id": "eval-nova",
+    "attachment_id": "nova-doc",
+    "source": "nova.txt",
+    "vector_candidates": [
+      "Project Nova uses a green interface.",
+      "Project Nova stores catalog data in MongoDB."
+    ],
+    "bm25_candidates": [
+      "MongoDB is the database used by Project Nova.",
+      "Project Nova uses a green interface."
+    ],
+    "expected_keyword": "mongodb"
+  },
+  {
+    "name": "orion_billing",
+    "question": "What database stores Project Orion billing records?",
+    "thread_id": "eval-orion",
+    "attachment_id": "orion-doc",
+    "source": "orion.txt",
+    "vector_candidates": [
+      "Project Orion has an amber dashboard.",
+      "Project Orion stores billing records in MariaDB."
+    ],
+    "bm25_candidates": [
+      "MariaDB stores billing records for Project Orion.",
+      "Project Orion has an amber dashboard."
+    ],
+    "expected_keyword": "mariadb"
+  }
+]
