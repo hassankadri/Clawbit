@@ -9,6 +9,8 @@ import os
 import certifi
 from rank_bm25 import BM25Okapi
 from flashrank import Ranker, RerankRequest
+import time
+from threading import Lock
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(ENV_PATH)
@@ -50,6 +52,12 @@ vectorstore = Chroma(
 
 SUPPORTED_DOCUMENT_SUFFIXES = {".pdf", ".docx", ".txt", ".md", ".csv"}
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
+
+RAG_CACHE_TTL_SECONDS = 300
+RAG_CACHE_MAX_ENTRIES = 128
+
+_RAG_CACHE = {}
+_RAG_CACHE_LOCK = Lock()
 
 
 def _thread_upload_dir(thread_id: str) -> Path:
@@ -424,6 +432,97 @@ def _rerank_documents(
 
     return reranked_docs
 
+
+def _build_rag_cache_key(
+    query: str,
+    thread_id: str,
+    document_attachment_ids: list[str],
+    k: int,
+) -> tuple:
+    return (
+        thread_id,
+        tuple(sorted(document_attachment_ids)),
+        query.strip().lower(),
+        k,
+    )
+
+
+def _get_rag_cache(
+    cache_key: tuple,
+):
+    now = time.monotonic()
+
+    with _RAG_CACHE_LOCK:
+        cached = _RAG_CACHE.get(
+            cache_key
+        )
+
+        if not cached:
+            return None
+
+        created_at, result, metadata = cached
+
+        if (
+            now - created_at
+            > RAG_CACHE_TTL_SECONDS
+        ):
+            _RAG_CACHE.pop(
+                cache_key,
+                None,
+            )
+            return None
+
+        return (
+            result,
+            metadata.copy(),
+        )
+
+
+def _set_rag_cache(
+    cache_key: tuple,
+    result: str,
+    metadata: dict,
+):
+    now = time.monotonic()
+
+    with _RAG_CACHE_LOCK:
+        expired_keys = [
+            key
+            for key, value
+            in _RAG_CACHE.items()
+            if (
+                now - value[0]
+                > RAG_CACHE_TTL_SECONDS
+            )
+        ]
+
+        for key in expired_keys:
+            _RAG_CACHE.pop(
+                key,
+                None,
+            )
+
+        if (
+            len(_RAG_CACHE)
+            >= RAG_CACHE_MAX_ENTRIES
+        ):
+            oldest_key = min(
+                _RAG_CACHE,
+                key=lambda key:
+                    _RAG_CACHE[key][0],
+            )
+
+            _RAG_CACHE.pop(
+                oldest_key,
+                None,
+            )
+
+        _RAG_CACHE[cache_key] = (
+            now,
+            result,
+            metadata.copy(),
+        )
+
 def retrieve_from_rag(
     query: str,
     thread_id: str,
@@ -445,7 +544,41 @@ def retrieve_from_rag(
         )
     ]
 
-    search_limit = max(k * 4, 12)
+    search_limit = max(
+        k * 4,
+        12,
+    )
+
+    cache_key = _build_rag_cache_key(
+        query=query,
+        thread_id=thread_id,
+        document_attachment_ids=(
+            document_attachment_ids
+        ),
+        k=k,
+    )
+
+    cached = _get_rag_cache(
+        cache_key
+    )
+
+    if cached is not None:
+        cached_result, cached_metadata = (
+            cached
+        )
+
+        if inspector is not None:
+            inspector.update(
+                cached_metadata
+            )
+            inspector["cache_hit"] = True
+
+        return cached_result
+
+    metadata = {
+        "cache_hit": False,
+        "search_limit": search_limit,
+    }
 
     vector_docs = []
     bm25_docs = []
@@ -454,7 +587,10 @@ def retrieve_from_rag(
     retrieval_error = False
 
     try:
-        if attachment_ids and not document_attachment_ids:
+        if (
+            attachment_ids
+            and not document_attachment_ids
+        ):
             vector_docs = []
             bm25_docs = []
 
@@ -464,19 +600,27 @@ def retrieve_from_rag(
             }
 
             if document_attachment_ids:
-                if len(document_attachment_ids) == 1:
+                if (
+                    len(
+                        document_attachment_ids
+                    )
+                    == 1
+                ):
                     attachment_filter = (
                         document_attachment_ids[0]
                     )
+
                 else:
                     attachment_filter = {
-                        "$in": document_attachment_ids
+                        "$in":
+                            document_attachment_ids
                     }
 
                 search_filter = {
                     "$and": [
                         {
-                            "thread_id": thread_id
+                            "thread_id":
+                                thread_id
                         },
                         {
                             "attachment_id":
@@ -485,10 +629,12 @@ def retrieve_from_rag(
                     ]
                 }
 
-            vector_docs = vectorstore.similarity_search(
-                query,
-                k=search_limit,
-                filter=search_filter,
+            vector_docs = (
+                vectorstore.similarity_search(
+                    query,
+                    k=search_limit,
+                    filter=search_filter,
+                )
             )
 
             bm25_docs = _bm25_search(
@@ -508,29 +654,30 @@ def retrieve_from_rag(
         docs = []
         retrieval_error = True
 
-    if inspector is not None:
-        inspector.update(
-            {
-                "search_limit": search_limit,
-                "vector_candidates": len(
-                    vector_docs
-                ),
-                "bm25_candidates": len(
-                    bm25_docs
-                ),
-                "hybrid_candidates": len(
-                    docs
-                ),
-                "retrieval_error": retrieval_error,
-            }
-        )
+    metadata.update(
+        {
+            "vector_candidates": len(
+                vector_docs
+            ),
+            "bm25_candidates": len(
+                bm25_docs
+            ),
+            "hybrid_candidates": len(
+                docs
+            ),
+            "retrieval_error":
+                retrieval_error,
+        }
+    )
 
     unique_docs = []
     seen_chunks = set()
 
     for doc in docs:
         chunk_key = (
-            doc.metadata.get("attachment_id"),
+            doc.metadata.get(
+                "attachment_id"
+            ),
             doc.metadata.get("page"),
             doc.page_content,
         )
@@ -538,21 +685,27 @@ def retrieve_from_rag(
         if chunk_key in seen_chunks:
             continue
 
-        seen_chunks.add(chunk_key)
-        unique_docs.append(doc)
-
-    if inspector is not None:
-        inspector["after_deduplication"] = len(
-            unique_docs
+        seen_chunks.add(
+            chunk_key
         )
+
+        unique_docs.append(
+            doc
+        )
+
+    metadata[
+        "after_deduplication"
+    ] = len(unique_docs)
 
     reranking_completed = False
 
     try:
-        unique_docs = _rerank_documents(
-            query,
-            unique_docs,
-            limit=search_limit,
+        unique_docs = (
+            _rerank_documents(
+                query,
+                unique_docs,
+                limit=search_limit,
+            )
         )
 
         reranking_completed = True
@@ -560,16 +713,15 @@ def retrieve_from_rag(
     except Exception:
         pass
 
-    if inspector is not None:
-        inspector.update(
-            {
-                "reranking_completed":
-                    reranking_completed,
-                "reranked_candidates": len(
-                    unique_docs
-                ),
-            }
-        )
+    metadata.update(
+        {
+            "reranking_completed":
+                reranking_completed,
+            "reranked_candidates": len(
+                unique_docs
+            ),
+        }
+    )
 
     selected_docs = []
     selected_keys = set()
@@ -578,24 +730,35 @@ def retrieve_from_rag(
     # First pass:
     # Prefer one relevant chunk from each document.
     for doc in unique_docs:
-        attachment_id = doc.metadata.get(
-            "attachment_id"
+        attachment_id = (
+            doc.metadata.get(
+                "attachment_id"
+            )
         )
 
-        if attachment_id in seen_attachments:
+        if (
+            attachment_id
+            in seen_attachments
+        ):
             continue
 
-        selected_docs.append(doc)
+        selected_docs.append(
+            doc
+        )
 
         selected_keys.add(
             (
                 attachment_id,
-                doc.metadata.get("page"),
+                doc.metadata.get(
+                    "page"
+                ),
                 doc.page_content,
             )
         )
 
-        seen_attachments.add(attachment_id)
+        seen_attachments.add(
+            attachment_id
+        )
 
         if len(selected_docs) >= k:
             break
@@ -608,23 +771,35 @@ def retrieve_from_rag(
                 doc.metadata.get(
                     "attachment_id"
                 ),
-                doc.metadata.get("page"),
+                doc.metadata.get(
+                    "page"
+                ),
                 doc.page_content,
             )
 
-            if chunk_key in selected_keys:
+            if (
+                chunk_key
+                in selected_keys
+            ):
                 continue
 
-            selected_docs.append(doc)
-            selected_keys.add(chunk_key)
+            selected_docs.append(
+                doc
+            )
 
-            if len(selected_docs) >= k:
+            selected_keys.add(
+                chunk_key
+            )
+
+            if (
+                len(selected_docs)
+                >= k
+            ):
                 break
 
-    if inspector is not None:
-        inspector["selected_chunks"] = len(
-            selected_docs
-        )
+    metadata[
+        "selected_chunks"
+    ] = len(selected_docs)
 
     if not selected_docs:
         previews = [
@@ -633,42 +808,62 @@ def retrieve_from_rag(
                 f"{record.get('name', 'uploaded document')}]\n"
                 f"{record.get('preview')}"
             )
-            for index, record in enumerate(
+            for index, record
+            in enumerate(
                 records,
                 start=1,
             )
             if (
-                record.get("kind") == "document"
-                and record.get("preview")
+                record.get("kind")
+                == "document"
+                and record.get(
+                    "preview"
+                )
             )
         ]
 
         if previews:
-            if inspector is not None:
-                inspector["fallback_used"] = True
-                inspector["sources"] = [
-                    {
-                        "file": record.get(
-                            "name",
-                            "uploaded document",
-                        ),
-                        "page": None,
-                    }
-                    for record in records
-                    if (
-                        record.get("kind")
-                        == "document"
-                        and record.get("preview")
+            metadata[
+                "fallback_used"
+            ] = True
+
+            metadata["sources"] = [
+                {
+                    "file": record.get(
+                        "name",
+                        "uploaded document",
+                    ),
+                    "page": None,
+                }
+                for record in records
+                if (
+                    record.get("kind")
+                    == "document"
+                    and record.get(
+                        "preview"
                     )
-                ][:k]
+                )
+            ][:k]
+
+            if inspector is not None:
+                inspector.update(
+                    metadata
+                )
 
             return "\n\n".join(
                 previews[:k]
             )
 
+        metadata[
+            "fallback_used"
+        ] = False
+
+        metadata["sources"] = []
+
         if inspector is not None:
-            inspector["fallback_used"] = False
-            inspector["sources"] = []
+            inspector.update(
+                metadata
+            )
 
         return (
             "No relevant uploaded document "
@@ -687,17 +882,21 @@ def retrieve_from_rag(
             "uploaded document",
         )
 
-        page = doc.metadata.get("page")
+        page = doc.metadata.get(
+            "page"
+        )
 
         if page:
             source_label = (
                 f"{source} - Page {page}"
             )
+
         else:
             source_label = source
 
         results.append(
-            f"[Source {i}: {source_label}]\n"
+            f"[Source {i}: "
+            f"{source_label}]\n"
             f"{doc.page_content}"
         )
 
@@ -708,8 +907,29 @@ def retrieve_from_rag(
             }
         )
 
-    if inspector is not None:
-        inspector["fallback_used"] = False
-        inspector["sources"] = inspector_sources
+    metadata[
+        "fallback_used"
+    ] = False
 
-    return "\n\n".join(results)
+    metadata[
+        "sources"
+    ] = inspector_sources
+
+    result = "\n\n".join(
+        results
+    )
+
+    if inspector is not None:
+        inspector.update(
+            metadata
+        )
+
+    # Cache only successful retrievals.
+    if not retrieval_error:
+        _set_rag_cache(
+            cache_key,
+            result,
+            metadata,
+        )
+
+    return result

@@ -28,6 +28,9 @@ MODEL_CONFIGS = {
 
 ALLOWED_MODELS = set(MODEL_CONFIGS)
 
+MODEL_TIMEOUT_SECONDS = 45.0
+MODEL_RETRIES = 3
+
 
 def normalize_model_name(model_name: str | None) -> str:
     if not model_name:
@@ -41,7 +44,10 @@ def normalize_model_name(model_name: str | None) -> str:
         "gemini 3.5 flash": "gemini-3.5-flash",
     }
 
-    model_name = aliases.get(model_name, model_name)
+    model_name = aliases.get(
+        model_name,
+        model_name,
+    )
 
     if model_name not in ALLOWED_MODELS:
         return DEFAULT_MODEL
@@ -53,28 +59,49 @@ def build_chat_model(
     model_name: str,
     temperature: float = 0.3,
     max_tokens: int | None = None,
+    streaming: bool = False,
 ):
-    config = MODEL_CONFIGS[model_name]
+    model_name = normalize_model_name(
+        model_name
+    )
+
+    config = MODEL_CONFIGS[
+        model_name
+    ]
 
     if config["provider"] == "google":
+        google_kwargs = {
+            "model": config["model"],
+            "temperature": temperature,
+            "streaming": streaming,
+            "retries": MODEL_RETRIES,
+            "request_timeout": MODEL_TIMEOUT_SECONDS,
+        }
+
+        if max_tokens is not None:
+            google_kwargs["max_tokens"] = max_tokens
+
         return ChatGoogleGenerativeAI(
-            model=config["model"],
-            temperature=temperature,
-            streaming=False,
+            **google_kwargs
         )
 
     if config["provider"] == "groq":
         groq_kwargs = {
             "model": config["model"],
             "temperature": temperature,
-            "streaming": False,
+            "streaming": streaming,
+            "max_retries": MODEL_RETRIES,
+            "timeout": MODEL_TIMEOUT_SECONDS,
         }
 
         if max_tokens is not None:
             groq_kwargs["max_tokens"] = max_tokens
 
-        return ChatGroq(**groq_kwargs)
+        return ChatGroq(
+            **groq_kwargs
+        )
 
     raise ValueError(
-        f"Unsupported model provider: {config['provider']}"
+        "Unsupported model provider: "
+        f"{config['provider']}"
     )

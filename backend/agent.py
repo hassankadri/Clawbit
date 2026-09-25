@@ -382,9 +382,11 @@ async def build_agent(
     model_name: str,
     mode: str = "normal",
     mcp_tools: list | None = None,
+    streaming: bool = False,
 ):
     """
-    Build one LangGraph agent for the selected model and mode.
+    Build one LangGraph agent for the selected model, mode,
+    and streaming configuration.
     """
 
     selected_model = normalize_model_name(model_name)
@@ -400,6 +402,7 @@ async def build_agent(
     llm = build_chat_model(
         selected_model,
         max_tokens=research_max_tokens,
+        streaming=streaming,
     )
 
     base_tools = (
@@ -413,46 +416,89 @@ async def build_agent(
         mcp_tools or [],
     )
 
-    llm_with_tools = llm.bind_tools(active_tools)
+    llm_with_tools = llm.bind_tools(
+        active_tools
+    )
 
-    async def chatbot_node(state: MessagesState):
+    async def chatbot_node(
+        state: MessagesState,
+    ):
         if selected_mode == "research":
             system_prompt = RESEARCH_MODE_PROMPT
         else:
             system_prompt = SYSTEM_PROMPT
 
-        conversation_messages = state["messages"]
+        conversation_messages = (
+            state["messages"]
+        )
 
         if selected_mode == "research":
-            conversation_messages = conversation_messages[-8:]
+            conversation_messages = (
+                conversation_messages[-8:]
+            )
 
         messages = [
-            SystemMessage(content=system_prompt)
+            SystemMessage(
+                content=system_prompt
+            )
         ] + conversation_messages
 
-        response = await llm_with_tools.ainvoke(messages)
+        response = await llm_with_tools.ainvoke(
+            messages
+        )
 
-        return {"messages": [response]}
+        return {
+            "messages": [response]
+        }
 
-    tool_node = ToolNode(active_tools)
+    tool_node = ToolNode(
+        active_tools
+    )
 
-    workflow = StateGraph(MessagesState)
+    workflow = StateGraph(
+        MessagesState
+    )
 
-    workflow.add_node("chatbot", chatbot_node)
-    workflow.add_node("tools", tool_node)
+    workflow.add_node(
+        "chatbot",
+        chatbot_node,
+    )
 
-    workflow.add_edge(START, "chatbot")
-    workflow.add_conditional_edges("chatbot", tools_condition)
-    workflow.add_edge("tools", "chatbot")
+    workflow.add_node(
+        "tools",
+        tool_node,
+    )
+
+    workflow.add_edge(
+        START,
+        "chatbot",
+    )
+
+    workflow.add_conditional_edges(
+        "chatbot",
+        tools_condition,
+    )
+
+    workflow.add_edge(
+        "tools",
+        "chatbot",
+    )
 
     conn = await aiosqlite.connect(
         str(CHECKPOINT_DB_PATH)
     )
-    _CHECKPOINT_CONNECTIONS.append(conn)
 
-    checkpointer = AsyncSqliteSaver(conn)
+    _CHECKPOINT_CONNECTIONS.append(
+        conn
+    )
 
-    return workflow.compile(checkpointer=checkpointer)
+    checkpointer = AsyncSqliteSaver(
+        conn
+    )
+
+    return workflow.compile(
+        checkpointer=checkpointer
+    )
 
 
 _AGENT_CACHE = {}
@@ -462,36 +508,53 @@ _CHECKPOINT_CONNECTIONS = []
 async def get_agent(
     model_name: str | None = None,
     mode: str = "normal",
+    streaming: bool = False,
 ):
     """
-    Return a cached LangGraph agent for the selected model and mode.
+    Return a cached LangGraph agent for the selected
+    model, mode, and streaming configuration.
 
-    MCP tools are discovered asynchronously the first time an agent
-    configuration is created, then reused through the agent cache.
+    MCP tools are discovered asynchronously the first
+    time an agent configuration is created, then reused
+    through the agent cache.
     """
 
-    selected_model = normalize_model_name(model_name)
-    selected_mode = normalize_agent_mode(mode)
+    selected_model = normalize_model_name(
+        model_name
+    )
+
+    selected_mode = normalize_agent_mode(
+        mode
+    )
 
     cache_key = (
         selected_model,
         selected_mode,
+        streaming,
     )
 
     if cache_key not in _AGENT_CACHE:
         try:
             mcp_tools = await load_mcp_tools()
+
         except Exception as exc:
-            print(f"MCP tools unavailable: {exc}")
+            print(
+                f"MCP tools unavailable: {exc}"
+            )
             mcp_tools = []
 
-        _AGENT_CACHE[cache_key] = await build_agent(
+        _AGENT_CACHE[
+            cache_key
+        ] = await build_agent(
             selected_model,
             selected_mode,
             mcp_tools=mcp_tools,
+            streaming=streaming,
         )
 
-    return _AGENT_CACHE[cache_key]
+    return _AGENT_CACHE[
+        cache_key
+    ]
 
 async def close_agent_resources() -> None:
     """

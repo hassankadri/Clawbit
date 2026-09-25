@@ -1,11 +1,15 @@
 import base64
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 import uuid
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+import groq
+from google.genai import errors as google_genai_errors
 
 from agent import close_agent_resources, get_agent
 from rag import (
@@ -189,6 +193,206 @@ def _build_user_message(
     return text_blocks + image_blocks
 
 
+def _sse_event(
+    event: str,
+    data: dict,
+) -> str:
+    payload = json.dumps(
+        data,
+        ensure_ascii=False,
+        default=str,
+    )
+
+    return (
+        f"event: {event}\n"
+        f"data: {payload}\n\n"
+    )
+
+
+def _update_inspector_from_messages(
+    inspector: dict,
+    messages: list,
+) -> None:
+    for message in reversed(messages):
+        message_type = getattr(
+            message,
+            "type",
+            "",
+        )
+
+        tool_name = getattr(
+            message,
+            "name",
+            "",
+        )
+
+        artifact = getattr(
+            message,
+            "artifact",
+            None,
+        )
+
+        if (
+            message_type == "tool"
+            and tool_name
+            == "search_uploaded_documents"
+            and isinstance(artifact, dict)
+        ):
+            inspector.update(artifact)
+            return
+
+
+def _exception_chain(exc: Exception):
+    current = exc
+    seen = set()
+
+    while (
+        current is not None
+        and id(current) not in seen
+    ):
+        seen.add(id(current))
+        yield current
+
+        current = (
+            current.__cause__
+            or current.__context__
+        )
+
+
+def _provider_error_message(
+    exc: Exception,
+) -> str:
+    for current in _exception_chain(exc):
+        message = str(current).lower()
+
+        if isinstance(
+            current,
+            groq.RateLimitError,
+        ):
+            return (
+                "The AI provider is rate limited right now. "
+                "Please wait a moment and try again."
+            )
+
+        if isinstance(
+            current,
+            groq.APITimeoutError,
+        ):
+            return (
+                "The AI provider took too long to respond. "
+                "Please try again."
+            )
+
+        if isinstance(
+            current,
+            groq.APIConnectionError,
+        ):
+            return (
+                "Clawbit could not reach the AI provider. "
+                "Please check your connection and try again."
+            )
+
+        if isinstance(
+            current,
+            google_genai_errors.ClientError,
+        ):
+            code = (
+                getattr(current, "code", None)
+                or getattr(
+                    current,
+                    "status_code",
+                    None,
+                )
+            )
+
+            if (
+                code == 429
+                or "429" in message
+                or "resource_exhausted" in message
+                or "rate limit" in message
+                or "quota" in message
+            ):
+                return (
+                    "The AI provider is rate limited right now. "
+                    "Please wait a moment and try again."
+                )
+
+            return (
+                "The AI provider rejected the request. "
+                "Please adjust the request and try again."
+            )
+
+        if isinstance(
+            current,
+            google_genai_errors.ServerError,
+        ):
+            return (
+                "The AI provider is temporarily unavailable. "
+                "Please try again shortly."
+            )
+
+        if isinstance(
+            current,
+            google_genai_errors.APIError,
+        ):
+            if (
+                "429" in message
+                or "resource_exhausted" in message
+                or "rate limit" in message
+                or "quota" in message
+            ):
+                return (
+                    "The AI provider is rate limited right now. "
+                    "Please wait a moment and try again."
+                )
+
+            if (
+                "timeout" in message
+                or "timed out" in message
+            ):
+                return (
+                    "The AI provider took too long to respond. "
+                    "Please try again."
+                )
+
+    message = str(exc).lower()
+
+    if (
+        "429" in message
+        or "rate limit" in message
+        or "resource_exhausted" in message
+        or "quota exceeded" in message
+        or "too many requests" in message
+    ):
+        return (
+            "The AI provider is rate limited right now. "
+            "Please wait a moment and try again."
+        )
+
+    if (
+        "timeout" in message
+        or "timed out" in message
+    ):
+        return (
+            "The AI provider took too long to respond. "
+            "Please try again."
+        )
+
+    if (
+        "connection" in message
+        or "network" in message
+    ):
+        return (
+            "Clawbit could not reach the AI provider. "
+            "Please check your connection and try again."
+        )
+
+    return (
+        "Clawbit could not complete the request because "
+        "the AI provider returned an error. Please try again."
+    )
+
+
 @app.get("/")
 def home():
     return {
@@ -347,21 +551,36 @@ async def chat(req: ChatRequest):
         ),
     }
 
-    result = await agent.ainvoke(
-        {
-            "messages": [user_message],
-        },
-        config={
-            "configurable": {
-                "thread_id": thread_id,
-                "workspace_id": workspace_id,
-                "attachment_ids": attachment_ids,
-                "model": req.model,
-                "mode": req.mode,
-                "user_query": req.message,
-            }
-        },
-    )
+    try:
+        result = await agent.ainvoke(
+            {
+                "messages": [user_message],
+            },
+            config={
+                "configurable": {
+                    "thread_id": thread_id,
+                    "workspace_id": workspace_id,
+                    "attachment_ids": attachment_ids,
+                    "model": req.model,
+                    "mode": req.mode,
+                    "user_query": req.message,
+                }
+            },
+        )
+
+    except Exception as exc:
+        print(
+            "Chat provider error: "
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        return ChatResponse(
+            response=_provider_error_message(
+                exc
+            ),
+            thread_id=thread_id,
+            inspector=inspector,
+        )
 
     if isinstance(result, dict):
         messages = result.get(
@@ -376,33 +595,10 @@ async def chat(req: ChatRequest):
         else:
             response = ""
 
-        for message in reversed(messages):
-            message_type = getattr(
-                message,
-                "type",
-                "",
-            )
-
-            tool_name = getattr(
-                message,
-                "name",
-                "",
-            )
-
-            artifact = getattr(
-                message,
-                "artifact",
-                None,
-            )
-
-            if (
-                message_type == "tool"
-                and tool_name
-                == "search_uploaded_documents"
-                and isinstance(artifact, dict)
-            ):
-                inspector.update(artifact)
-                break
+        _update_inspector_from_messages(
+            inspector,
+            messages,
+        )
 
     else:
         response = extract_text_content(
@@ -413,4 +609,176 @@ async def chat(req: ChatRequest):
         response=response,
         thread_id=thread_id,
         inspector=inspector,
+    )
+
+
+@app.post("/chat/stream")
+async def chat_stream(req: ChatRequest):
+    thread_id = (
+        req.thread_id
+        or str(uuid.uuid4())
+    )
+
+    workspace_id = (
+        req.workspace_id
+        or thread_id
+    )
+
+    attachment_ids = (
+        req.attachment_ids
+        or []
+    )
+
+    inspector = {
+        "rag_used": False,
+        "user_query": req.message,
+    }
+
+    attachments = get_attachment_records(
+        thread_id,
+        attachment_ids,
+    )
+
+    if attachments and any(
+        attachment.get("kind") == "image"
+        for attachment in attachments
+    ) and not _is_vision_model(req.model):
+        async def vision_error_stream():
+            yield _sse_event(
+                "error",
+                {
+                    "message": (
+                        "The selected model does not support "
+                        "image understanding. Please choose a "
+                        "vision-capable model."
+                    ),
+                    "thread_id": thread_id,
+                },
+            )
+
+        return StreamingResponse(
+            vision_error_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    agent = await get_agent(
+        req.model,
+        req.mode,
+        streaming=True,
+    )
+
+    user_message = {
+        "role": "user",
+        "content": _build_user_message(
+            req.message,
+            attachments,
+            req.model,
+        ),
+    }
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+            "workspace_id": workspace_id,
+            "attachment_ids": attachment_ids,
+            "model": req.model,
+            "mode": req.mode,
+            "user_query": req.message,
+        }
+    }
+
+    async def event_stream():
+        try:
+            yield _sse_event(
+                "start",
+                {
+                    "thread_id": thread_id,
+                },
+            )
+
+            async for stream_mode, chunk in agent.astream(
+                {
+                    "messages": [user_message],
+                },
+                config=config,
+                stream_mode=[
+                    "messages",
+                    "values",
+                ],
+            ):
+                if stream_mode == "messages":
+                    message_chunk, metadata = chunk
+
+                    if (
+                        metadata.get("langgraph_node")
+                        != "chatbot"
+                    ):
+                        continue
+
+                    text = extract_text_content(
+                        message_chunk
+                    )
+
+                    if text:
+                        yield _sse_event(
+                            "token",
+                            {
+                                "text": text,
+                            },
+                        )
+
+                elif stream_mode == "values":
+                    if not isinstance(
+                        chunk,
+                        dict,
+                    ):
+                        continue
+
+                    messages = chunk.get(
+                        "messages",
+                        [],
+                    )
+
+                    _update_inspector_from_messages(
+                        inspector,
+                        messages,
+                    )
+
+            yield _sse_event(
+                "done",
+                {
+                    "thread_id": thread_id,
+                    "inspector": inspector,
+                },
+            )
+
+        except Exception as exc:
+            print(
+                "Streaming provider error: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+            yield _sse_event(
+                "error",
+                {
+                    "message": _provider_error_message(
+                        exc
+                    ),
+                    "thread_id": thread_id,
+                },
+            )
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
