@@ -6,6 +6,7 @@ import UserMessage from "./UserMessage";
 
 export interface MessageProps {
   theme: Theme;
+  assistantName: string;
   message: {
     id: string;
     role: "user" | "assistant";
@@ -20,6 +21,7 @@ export interface MessageProps {
 
 export default function Message({
   theme,
+  assistantName,
   message,
   onEditMessage,
   onDeleteMessage,
@@ -40,6 +42,7 @@ export default function Message({
   return (
     <AssistantMessage
       theme={theme}
+      assistantName={assistantName}
       content={message.content}
       status={message.status}
       onDelete={() => onDeleteMessage(message.id)}

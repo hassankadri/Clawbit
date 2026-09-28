@@ -1,32 +1,97 @@
+import {
+  getPersonalizationRequestPayload,
+  type PersonalizationRequestPayload,
+} from "@/lib/personalization";
+
+/* ====================================================== */
+/* API                                                    */
+/* ====================================================== */
+
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined"
     ? `http://${window.location.hostname || "127.0.0.1"}:8000`
     : "http://127.0.0.1:8000");
 
+/* ====================================================== */
+/* CHAT MODE                                              */
+/* ====================================================== */
+
 export type ChatMode =
   | "normal"
   | "research";
 
-/*
-  Current mode selected in the UI.
+const CHAT_MODE_STORAGE_KEY =
+  "clawbit.chat.mode.v1";
 
-  This lets the existing chat hook keep working
-  without forcing us to rewrite page.tsx right now.
-*/
 let activeChatMode: ChatMode =
   "normal";
+
+function isChatMode(
+  value: unknown,
+): value is ChatMode {
+  return (
+    value === "normal" ||
+    value === "research"
+  );
+}
 
 export function setActiveChatMode(
   mode: ChatMode,
 ) {
-  activeChatMode = mode;
+  activeChatMode =
+    mode;
+
+  if (
+    typeof window ===
+    "undefined"
+  ) {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      CHAT_MODE_STORAGE_KEY,
+      mode,
+    );
+  } catch {
+    // localStorage unavailable.
+  }
 }
 
 export function getActiveChatMode():
   ChatMode {
+  if (
+    typeof window ===
+    "undefined"
+  ) {
+    return activeChatMode;
+  }
+
+  try {
+    const stored =
+      window.localStorage.getItem(
+        CHAT_MODE_STORAGE_KEY,
+      );
+
+    if (
+      isChatMode(
+        stored,
+      )
+    ) {
+      activeChatMode =
+        stored;
+    }
+  } catch {
+    // localStorage unavailable.
+  }
+
   return activeChatMode;
 }
+
+/* ====================================================== */
+/* CHAT TYPES                                             */
+/* ====================================================== */
 
 export interface ChatInspectorSource {
   file: string;
@@ -36,71 +101,161 @@ export interface ChatInspectorSource {
 export interface ChatInspector {
   rag_used: boolean;
 
-  user_query?: string;
-  tool_query?: string;
-  rewritten_query?: string;
+  user_query?:
+    string;
 
-  search_limit?: number;
+  tool_query?:
+    string;
 
-  vector_candidates?: number;
-  bm25_candidates?: number;
-  hybrid_candidates?: number;
+  rewritten_query?:
+    string;
 
-  retrieval_error?: boolean;
+  search_limit?:
+    number;
 
-  after_deduplication?: number;
+  vector_candidates?:
+    number;
 
-  reranking_completed?: boolean;
+  bm25_candidates?:
+    number;
 
-  reranked_candidates?: number;
+  hybrid_candidates?:
+    number;
 
-  selected_chunks?: number;
+  retrieval_error?:
+    boolean;
 
-  fallback_used?: boolean;
+  after_deduplication?:
+    number;
 
-  cache_hit?: boolean;
+  reranking_completed?:
+    boolean;
 
-  sources?: ChatInspectorSource[];
+  reranked_candidates?:
+    number;
 
-  [key: string]: unknown;
+  selected_chunks?:
+    number;
+
+  fallback_used?:
+    boolean;
+
+  cache_hit?:
+    boolean;
+
+  sources?:
+    ChatInspectorSource[];
+
+  [key: string]:
+    unknown;
 }
 
 export interface ChatRequest {
-  message: string;
+  message:
+    string;
 
-  model: string;
+  model:
+    string;
 
-  thread_id?: string;
+  thread_id?:
+    string;
 
-  workspace_id?: string;
+  workspace_id?:
+    string;
 
-  attachment_ids?: string[];
+  attachment_ids?:
+    string[];
 
-  mode?: ChatMode;
+  mode?:
+    ChatMode;
+
+  /*
+   * Personalization fields.
+   *
+   * These are optional here because resolveChatRequest()
+   * automatically fills them from the user's saved
+   * Personalization preferences.
+   */
+  assistant_name?:
+    PersonalizationRequestPayload["assistant_name"];
+
+  response_tone?:
+    PersonalizationRequestPayload["response_tone"];
+
+  response_length?:
+    PersonalizationRequestPayload["response_length"];
+
+  custom_instructions?:
+    PersonalizationRequestPayload["custom_instructions"];
 }
 
 export interface ChatResponse {
-  response: string;
+  response:
+    string;
 
-  thread_id: string;
+  thread_id:
+    string;
 
-  inspector?: ChatInspector | null;
+  inspector?:
+    | ChatInspector
+    | null;
 }
 
+/* ====================================================== */
+/* PERSONALIZED CHAT REQUEST                              */
+/* ====================================================== */
+
+function resolveChatRequest(
+  body: ChatRequest,
+): ChatRequest {
+  const personalization =
+    getPersonalizationRequestPayload();
+
+  return {
+    /*
+     * Add the saved personalization first.
+     *
+     * If a caller deliberately sends one of these fields,
+     * that explicit value wins because body is spread after it.
+     */
+    ...personalization,
+
+    ...body,
+
+    /*
+     * The UI's current Normal / Research setting is also
+     * attached automatically unless a caller explicitly
+     * supplied a mode.
+     */
+    mode:
+      body.mode ??
+      getActiveChatMode(),
+  };
+}
+
+/* ====================================================== */
+/* FILE UPLOAD                                            */
+/* ====================================================== */
+
 export interface AttachmentUploadResponse {
-  attachment_id: string;
+  attachment_id:
+    string;
 
-  name: string;
+  name:
+    string;
 
-  mime_type: string;
+  mime_type:
+    string;
 
   kind:
     | "document"
     | "image";
 
-  size: number;
+  size:
+    number;
 
-  preview?: string;
+  preview?:
+    string;
 }
 
 export interface UploadProgressHandlers {
@@ -113,12 +268,18 @@ export interface UploadProgressHandlers {
   ) => void;
 }
 
+/* ====================================================== */
+/* STREAMING TYPES                                        */
+/* ====================================================== */
+
 export interface StreamStartEvent {
-  thread_id: string;
+  thread_id:
+    string;
 }
 
 export interface StreamDoneEvent {
-  thread_id: string;
+  thread_id:
+    string;
 
   inspector?:
     | ChatInspector
@@ -126,9 +287,11 @@ export interface StreamDoneEvent {
 }
 
 export interface StreamErrorEvent {
-  message: string;
+  message:
+    string;
 
-  thread_id?: string;
+  thread_id?:
+    string;
 }
 
 export interface ChatStreamHandlers {
@@ -149,6 +312,117 @@ export interface ChatStreamHandlers {
   ) => void;
 }
 
+/* ====================================================== */
+/* MCP TYPES                                              */
+/* ====================================================== */
+
+export interface MCPTool {
+  name:
+    string;
+
+  description:
+    string;
+}
+
+export interface MCPServerStatus {
+  id:
+    string;
+
+  name:
+    string;
+
+  transport:
+    string;
+
+  status:
+    string;
+
+  tools:
+    MCPTool[];
+
+  error?:
+    string;
+}
+
+export interface MCPStatusResponse {
+  connected:
+    boolean;
+
+  server_count:
+    number;
+
+  connected_server_count:
+    number;
+
+  tool_count:
+    number;
+
+  servers:
+    MCPServerStatus[];
+}
+
+export interface MCPConnectorCatalogItem {
+  id:
+    string;
+
+  name:
+    string;
+
+  description:
+    string;
+
+  category:
+    string;
+
+  configured:
+    boolean;
+
+  auth?:
+    | "token"
+    | "oauth"
+    | string;
+
+  credential_label?:
+    string;
+
+  available?:
+    boolean;
+}
+
+export interface MCPConnectorCatalogResponse {
+  connectors:
+    MCPConnectorCatalogItem[];
+}
+
+export interface MCPOAuthStartResponse {
+  authorization_url:
+    string;
+
+  provider:
+    string;
+}
+
+export interface MCPActionResponse {
+  success:
+    boolean;
+
+  disconnected?:
+    boolean;
+
+  error?:
+    string;
+
+  server?:
+    MCPServerStatus;
+
+  [key: string]:
+    unknown;
+}
+
+/* ====================================================== */
+/* ERROR HELPERS                                          */
+/* ====================================================== */
+
 function getErrorMessage(
   responseText: string,
   fallback: string,
@@ -158,7 +432,14 @@ function getErrorMessage(
       JSON.parse(
         responseText,
       ) as {
-        detail?: unknown;
+        detail?:
+          unknown;
+
+        error?:
+          unknown;
+
+        message?:
+          unknown;
       };
 
     if (
@@ -168,24 +449,135 @@ function getErrorMessage(
     ) {
       return parsed.detail;
     }
+
+    if (
+      typeof parsed.error ===
+        "string" &&
+      parsed.error.trim()
+    ) {
+      return parsed.error;
+    }
+
+    if (
+      typeof parsed.message ===
+        "string" &&
+      parsed.message.trim()
+    ) {
+      return parsed.message;
+    }
   } catch {
-    return fallback;
+    // Response was not JSON.
   }
 
   return fallback;
 }
 
-function resolveChatRequest(
-  body: ChatRequest,
-): ChatRequest {
-  return {
-    ...body,
-
-    mode:
-      body.mode ??
-      activeChatMode,
-  };
+function backendUnavailableMessage() {
+  return (
+    `Could not reach the Clawbit backend at ${API_URL}. ` +
+    "Make sure the Python server is running."
+  );
 }
+
+/* ====================================================== */
+/* GENERIC JSON REQUEST                                   */
+/* ====================================================== */
+
+async function requestJSON<T>(
+  path: string,
+  options: RequestInit = {},
+  signal?: AbortSignal,
+): Promise<T> {
+  try {
+    const response =
+      await fetch(
+        `${API_URL}${path}`,
+        {
+          ...options,
+
+          headers: {
+            ...(options.body
+              ? {
+                  "Content-Type":
+                    "application/json",
+                }
+              : {}),
+
+            ...options.headers,
+          },
+
+          signal:
+            signal ??
+            options.signal,
+        },
+      );
+
+    const responseText =
+      await response.text();
+
+    if (
+      !response.ok
+    ) {
+      throw new Error(
+        getErrorMessage(
+          responseText,
+          `Request failed with status ${response.status}.`,
+        ),
+      );
+    }
+
+    if (
+      !responseText.trim()
+    ) {
+      return {} as T;
+    }
+
+    try {
+      return JSON.parse(
+        responseText,
+      ) as T;
+    } catch {
+      throw new Error(
+        "The backend returned an invalid response.",
+      );
+    }
+  } catch (
+    error
+  ) {
+    if (
+      error instanceof
+        DOMException &&
+      error.name ===
+        "AbortError"
+    ) {
+      throw error;
+    }
+
+    if (
+      error instanceof
+        Error &&
+      error.name ===
+        "AbortError"
+    ) {
+      throw error;
+    }
+
+    if (
+      error instanceof
+      TypeError
+    ) {
+      throw new Error(
+        backendUnavailableMessage(),
+      );
+    }
+
+    throw error;
+  }
+}
+
+/* ====================================================== */
+/* ATTACHMENT UPLOAD                                      */
+/* ====================================================== */
 
 export function uploadAttachment(
   threadId: string,
@@ -208,7 +600,9 @@ export function uploadAttachment(
         );
 
         xhr.upload.onprogress =
-          (event) => {
+          (
+            event,
+          ) => {
             if (
               !event.lengthComputable
             ) {
@@ -228,78 +622,87 @@ export function uploadAttachment(
             );
           };
 
-        xhr.onerror = () => {
-          const message =
-            `Upload failed. Could not reach the backend at ${API_URL}. ` +
-            "Make sure the Python server is running.";
-
-          handlers.onError?.(
-            message,
-          );
-
-          reject(
-            new Error(message),
-          );
-        };
-
-        xhr.onabort = () => {
-          const message =
-            "Upload canceled.";
-
-          handlers.onError?.(
-            message,
-          );
-
-          reject(
-            new Error(message),
-          );
-        };
-
-        xhr.onload = () => {
-          if (
-            xhr.status < 200 ||
-            xhr.status >= 300
-          ) {
+        xhr.onerror =
+          () => {
             const message =
-              getErrorMessage(
-                xhr.responseText,
-                "Upload failed. Please try again.",
+              backendUnavailableMessage();
+
+            handlers.onError?.(
+              message,
+            );
+
+            reject(
+              new Error(
+                message,
+              ),
+            );
+          };
+
+        xhr.onabort =
+          () => {
+            const message =
+              "Upload canceled.";
+
+            handlers.onError?.(
+              message,
+            );
+
+            reject(
+              new Error(
+                message,
+              ),
+            );
+          };
+
+        xhr.onload =
+          () => {
+            if (
+              xhr.status <
+                200 ||
+              xhr.status >=
+                300
+            ) {
+              const message =
+                getErrorMessage(
+                  xhr.responseText,
+
+                  "Upload failed. Please try again.",
+                );
+
+              handlers.onError?.(
+                message,
               );
 
-            handlers.onError?.(
-              message,
-            );
+              reject(
+                new Error(
+                  message,
+                ),
+              );
 
-            reject(
-              new Error(
+              return;
+            }
+
+            try {
+              resolve(
+                JSON.parse(
+                  xhr.responseText,
+                ) as AttachmentUploadResponse,
+              );
+            } catch {
+              const message =
+                "Upload failed because the backend returned an invalid response.";
+
+              handlers.onError?.(
                 message,
-              ),
-            );
+              );
 
-            return;
-          }
-
-          try {
-            resolve(
-              JSON.parse(
-                xhr.responseText,
-              ) as AttachmentUploadResponse,
-            );
-          } catch {
-            const message =
-              "Upload failed. Please try again.";
-
-            handlers.onError?.(
-              message,
-            );
-
-            reject(
-              new Error(
-                message,
-              ),
-            );
-          }
-        };
+              reject(
+                new Error(
+                  message,
+                ),
+              );
+            }
+          };
 
         const formData =
           new FormData();
@@ -328,240 +731,336 @@ export function uploadAttachment(
   };
 }
 
+/* ====================================================== */
+/* NORMAL CHAT                                            */
+/* ====================================================== */
+
 export async function chat(
   body: ChatRequest,
   signal?: AbortSignal,
 ): Promise<ChatResponse> {
-  const res =
-    await fetch(
-      `${API_URL}/chat`,
-      {
-        method: "POST",
+  try {
+    const response =
+      await fetch(
+        `${API_URL}/chat`,
+        {
+          method:
+            "POST",
 
-        headers: {
-          "Content-Type":
-            "application/json",
-        },
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
 
-        body:
-          JSON.stringify(
-            resolveChatRequest(
-              body,
+          body:
+            JSON.stringify(
+              resolveChatRequest(
+                body,
+              ),
             ),
-          ),
 
-        signal,
-      },
-    );
+          signal,
+        },
+      );
 
-  if (!res.ok) {
-    const responseText =
-      await res.text();
+    if (
+      !response.ok
+    ) {
+      const responseText =
+        await response.text();
 
-    throw new Error(
-      getErrorMessage(
-        responseText,
-        "Failed to send message.",
-      ),
-    );
+      throw new Error(
+        getErrorMessage(
+          responseText,
+
+          "Failed to send message.",
+        ),
+      );
+    }
+
+    return response.json();
+  } catch (
+    error
+  ) {
+    if (
+      error instanceof
+        DOMException &&
+      error.name ===
+        "AbortError"
+    ) {
+      throw error;
+    }
+
+    if (
+      error instanceof
+        Error &&
+      error.name ===
+        "AbortError"
+    ) {
+      throw error;
+    }
+
+    if (
+      error instanceof
+      TypeError
+    ) {
+      throw new Error(
+        backendUnavailableMessage(),
+      );
+    }
+
+    throw error;
   }
-
-  return res.json();
 }
+
+/* ====================================================== */
+/* STREAMING CHAT                                         */
+/* ====================================================== */
 
 export async function streamChat(
   body: ChatRequest,
+
   handlers:
     ChatStreamHandlers,
+
   signal?: AbortSignal,
 ): Promise<void> {
-  const res =
-    await fetch(
-      `${API_URL}/chat/stream`,
-      {
-        method: "POST",
+  let response:
+    Response;
 
-        headers: {
-          "Content-Type":
-            "application/json",
+  try {
+    response =
+      await fetch(
+        `${API_URL}/chat/stream`,
+        {
+          method:
+            "POST",
 
-          Accept:
-            "text/event-stream",
-        },
+          headers: {
+            "Content-Type":
+              "application/json",
 
-        body:
-          JSON.stringify(
-            resolveChatRequest(
-              body,
+            Accept:
+              "text/event-stream",
+          },
+
+          body:
+            JSON.stringify(
+              resolveChatRequest(
+                body,
+              ),
             ),
-          ),
 
-        signal,
-      },
+          signal,
+        },
+      );
+  } catch (
+    error
+  ) {
+    if (
+      error instanceof
+        DOMException &&
+      error.name ===
+        "AbortError"
+    ) {
+      throw error;
+    }
+
+    if (
+      error instanceof
+        Error &&
+      error.name ===
+        "AbortError"
+    ) {
+      throw error;
+    }
+
+    throw new Error(
+      backendUnavailableMessage(),
     );
+  }
 
-  if (!res.ok) {
+  if (
+    !response.ok
+  ) {
     const responseText =
-      await res.text();
+      await response.text();
 
     throw new Error(
       getErrorMessage(
         responseText,
+
         "Failed to start streaming response.",
       ),
     );
   }
 
-  if (!res.body) {
+  if (
+    !response.body
+  ) {
     throw new Error(
       "Streaming response body is unavailable.",
     );
   }
 
   const reader =
-    res.body.getReader();
+    response.body.getReader();
 
   const decoder =
     new TextDecoder();
 
-  let buffer = "";
+  let buffer =
+    "";
 
-  const handleEventBlock = (
-    block: string,
-  ) => {
-    const lines =
-      block.split(/\r?\n/);
-
-    let eventName =
-      "message";
-
-    const dataLines:
-      string[] = [];
-
-    for (
-      const line
-      of lines
-    ) {
-      if (
-        line.startsWith(
-          "event:",
-        )
-      ) {
-        eventName =
-          line
-            .slice(
-              "event:".length,
-            )
-            .trim();
-      } else if (
-        line.startsWith(
-          "data:",
-        )
-      ) {
-        dataLines.push(
-          line
-            .slice(
-              "data:".length,
-            )
-            .trimStart(),
+  const handleEventBlock =
+    (
+      block:
+        string,
+    ) => {
+      const lines =
+        block.split(
+          /\r?\n/,
         );
-      }
-    }
 
-    if (
-      dataLines.length === 0
-    ) {
-      return;
-    }
+      let eventName =
+        "message";
 
-    const rawData =
-      dataLines.join("\n");
+      const dataLines:
+        string[] =
+          [];
 
-    let data:
-      unknown;
-
-    try {
-      data =
-        JSON.parse(
-          rawData,
-        );
-    } catch {
-      return;
-    }
-
-    if (
-      eventName ===
-        "start" &&
-      typeof data ===
-        "object" &&
-      data !== null
-    ) {
-      handlers.onStart?.(
-        data as StreamStartEvent,
-      );
-
-      return;
-    }
-
-    if (
-      eventName ===
-        "token" &&
-      typeof data ===
-        "object" &&
-      data !== null
-    ) {
-      const tokenData =
-        data as {
-          text?: unknown;
-        };
-
-      if (
-        typeof tokenData.text ===
-        "string"
+      for (
+        const line
+        of lines
       ) {
-        handlers.onToken?.(
-          tokenData.text,
-        );
+        if (
+          line.startsWith(
+            "event:",
+          )
+        ) {
+          eventName =
+            line
+              .slice(
+                "event:".length,
+              )
+              .trim();
+        } else if (
+          line.startsWith(
+            "data:",
+          )
+        ) {
+          dataLines.push(
+            line
+              .slice(
+                "data:".length,
+              )
+              .trimStart(),
+          );
+        }
       }
 
-      return;
-    }
+      if (
+        dataLines.length ===
+        0
+      ) {
+        return;
+      }
 
-    if (
-      eventName ===
-        "done" &&
-      typeof data ===
-        "object" &&
-      data !== null
-    ) {
-      handlers.onDone?.(
-        data as StreamDoneEvent,
-      );
+      const rawData =
+        dataLines.join(
+          "\n",
+        );
 
-      return;
-    }
+      let data:
+        unknown;
 
-    if (
-      eventName ===
-        "error" &&
-      typeof data ===
-        "object" &&
-      data !== null
-    ) {
-      handlers.onError?.(
-        data as StreamErrorEvent,
-      );
-    }
-  };
+      try {
+        data =
+          JSON.parse(
+            rawData,
+          );
+      } catch {
+        return;
+      }
 
-  while (true) {
+      if (
+        eventName ===
+          "start" &&
+        typeof data ===
+          "object" &&
+        data !== null
+      ) {
+        handlers.onStart?.(
+          data as StreamStartEvent,
+        );
+
+        return;
+      }
+
+      if (
+        eventName ===
+          "token" &&
+        typeof data ===
+          "object" &&
+        data !== null
+      ) {
+        const tokenData =
+          data as {
+            text?:
+              unknown;
+          };
+
+        if (
+          typeof tokenData.text ===
+          "string"
+        ) {
+          handlers.onToken?.(
+            tokenData.text,
+          );
+        }
+
+        return;
+      }
+
+      if (
+        eventName ===
+          "done" &&
+        typeof data ===
+          "object" &&
+        data !== null
+      ) {
+        handlers.onDone?.(
+          data as StreamDoneEvent,
+        );
+
+        return;
+      }
+
+      if (
+        eventName ===
+          "error" &&
+        typeof data ===
+          "object" &&
+        data !== null
+      ) {
+        handlers.onError?.(
+          data as StreamErrorEvent,
+        );
+      }
+    };
+
+  while (
+    true
+  ) {
     const {
       value,
       done,
     } =
       await reader.read();
 
-    if (done) {
+    if (
+      done
+    ) {
       break;
     }
 
@@ -569,7 +1068,8 @@ export async function streamChat(
       decoder.decode(
         value,
         {
-          stream: true,
+          stream:
+            true,
         },
       );
 
@@ -601,9 +1101,251 @@ export async function streamChat(
   buffer +=
     decoder.decode();
 
-  if (buffer.trim()) {
+  if (
+    buffer.trim()
+  ) {
     handleEventBlock(
       buffer,
     );
   }
+}
+
+/* ====================================================== */
+/* MCP CATALOG                                            */
+/* ====================================================== */
+
+export async function getMCPCatalog(
+  signal?: AbortSignal,
+): Promise<MCPConnectorCatalogResponse> {
+  return requestJSON<MCPConnectorCatalogResponse>(
+    "/mcp/catalog",
+    {
+      method:
+        "GET",
+    },
+    signal,
+  );
+}
+
+/* ====================================================== */
+/* MCP STATUS                                             */
+/* ====================================================== */
+
+export async function getMCPStatus(
+  signal?: AbortSignal,
+): Promise<MCPStatusResponse> {
+  return requestJSON<MCPStatusResponse>(
+    "/mcp/status",
+    {
+      method:
+        "GET",
+    },
+    signal,
+  );
+}
+
+/* ====================================================== */
+/* MCP REFRESH                                            */
+/* ====================================================== */
+
+export async function refreshMCPStatus(
+  signal?: AbortSignal,
+): Promise<MCPStatusResponse> {
+  return requestJSON<MCPStatusResponse>(
+    "/mcp/refresh",
+    {
+      method:
+        "POST",
+    },
+    signal,
+  );
+}
+
+/* ====================================================== */
+/* GITHUB MCP                                             */
+/* ====================================================== */
+
+export async function connectGitHubMCP(
+  token: string,
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/connect/github",
+
+    {
+      method:
+        "POST",
+
+      body:
+        JSON.stringify({
+          token,
+        }),
+    },
+
+    signal,
+  );
+}
+
+export async function disconnectGitHubMCP(
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/disconnect/github",
+
+    {
+      method:
+        "POST",
+    },
+
+    signal,
+  );
+}
+
+/* ====================================================== */
+/* NOTION MCP                                             */
+/* ====================================================== */
+
+export async function connectNotionMCP(
+  token: string,
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/connect/notion",
+
+    {
+      method:
+        "POST",
+
+      body:
+        JSON.stringify({
+          token,
+        }),
+    },
+
+    signal,
+  );
+}
+
+export async function disconnectNotionMCP(
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/disconnect/notion",
+
+    {
+      method:
+        "POST",
+    },
+
+    signal,
+  );
+}
+
+/* ====================================================== */
+/* STRIPE MCP                                             */
+/* ====================================================== */
+
+export async function connectStripeMCP(
+  secretKey: string,
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/connect/stripe",
+
+    {
+      method:
+        "POST",
+
+      body:
+        JSON.stringify({
+          secret_key:
+            secretKey,
+        }),
+    },
+
+    signal,
+  );
+}
+
+export async function disconnectStripeMCP(
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/disconnect/stripe",
+
+    {
+      method:
+        "POST",
+    },
+
+    signal,
+  );
+}
+
+/* ====================================================== */
+/* GOOGLE DRIVE MCP                                       */
+/* ====================================================== */
+
+export async function connectGoogleDriveMCP(
+  signal?: AbortSignal,
+): Promise<MCPOAuthStartResponse> {
+  return requestJSON<MCPOAuthStartResponse>(
+    "/mcp/connect/google-drive",
+
+    {
+      method:
+        "GET",
+    },
+
+    signal,
+  );
+}
+
+export async function disconnectGoogleDriveMCP(
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/disconnect/google-drive",
+
+    {
+      method:
+        "POST",
+    },
+
+    signal,
+  );
+}
+
+/* ====================================================== */
+/* SLACK MCP                                              */
+/* ====================================================== */
+
+export async function connectSlackMCP(
+  signal?: AbortSignal,
+): Promise<MCPOAuthStartResponse> {
+  return requestJSON<MCPOAuthStartResponse>(
+    "/mcp/connect/slack",
+
+    {
+      method:
+        "GET",
+    },
+
+    signal,
+  );
+}
+
+export async function disconnectSlackMCP(
+  signal?: AbortSignal,
+): Promise<MCPActionResponse> {
+  return requestJSON<MCPActionResponse>(
+    "/mcp/disconnect/slack",
+
+    {
+      method:
+        "POST",
+    },
+
+    signal,
+  );
 }

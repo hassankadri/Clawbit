@@ -1,48 +1,44 @@
 "use client";
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import { AnimatePresence, motion } from "framer-motion";
 
 import {
-  AnimatePresence,
-  motion,
-} from "framer-motion";
-
-import {
+  BookOpen,
   CircleHelp,
-  FolderKanban,
-  MessageSquare,
+  Folder,
   MoreHorizontal,
-  Palette,
   PanelLeftClose,
   Pencil,
   Pin,
-  Plus,
   PlugZap,
   Search,
   Settings2,
-  Share2,
   SlidersHorizontal,
+  SquarePen,
   Trash2,
   UserRound,
 } from "lucide-react";
 
 import {
+  useEffect,
+  useRef,
   useState,
   type ComponentType,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 
 import ClawbitMark from "@/components/brand/ClawbitMark";
 import UserAvatar from "@/components/common/UserAvatar";
+
+import type { RouteView } from "@/lib/navigation";
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-type AppView =
-  | "chats"
-  | "projects"
-  | "plugins"
-  | "customize"
-  | "settings"
-  | "help";
+/* ====================================================== */
+/* TYPES                                                  */
+/* ====================================================== */
 
 interface SidebarConversation {
   id: string;
@@ -53,16 +49,24 @@ interface SidebarConversation {
 
 interface SidebarProps {
   theme: Theme;
-  activeView: AppView;
+  activeView: RouteView;
   collapsed: boolean;
 
   pinnedChats: SidebarConversation[];
   recentChats: SidebarConversation[];
 
+  projects: Array<{
+    id: string;
+    name: string;
+  }>;
+
+  activeProjectId: string | null;
   activeConversationId: string | null;
 
+  onOpenProject: (id: string) => void;
+
   onNewChat: () => void;
-  onNavigate: (view: AppView) => void;
+  onNavigate: (view: RouteView) => void;
   onToggleCollapsed: () => void;
   onOpenCommandPalette: () => void;
 
@@ -76,16 +80,15 @@ interface SidebarProps {
   ) => void;
 }
 
+/* ====================================================== */
+/* NAVIGATION                                             */
+/* ====================================================== */
+
 const navigationItems = [
   {
-    id: "chats",
-    label: "Chats",
-    icon: MessageSquare,
-  },
-  {
     id: "projects",
-    label: "Workspaces",
-    icon: FolderKanban,
+    label: "Projects",
+    icon: Folder,
   },
   {
     id: "plugins",
@@ -93,11 +96,39 @@ const navigationItems = [
     icon: PlugZap,
   },
   {
-    id: "customize",
-    label: "Customize",
-    icon: Palette,
+    id: "library",
+    label: "Library",
+    icon: BookOpen,
   },
 ] as const;
+
+/* ====================================================== */
+/* SIDEBAR WIDTH                                          */
+/* ====================================================== */
+
+const SIDEBAR_WIDTH_KEY =
+  "clawbit.sidebar.width.v2";
+
+const DEFAULT_SIDEBAR_WIDTH = 250;
+const MIN_SIDEBAR_WIDTH = 210;
+const MAX_SIDEBAR_WIDTH = 390;
+const COLLAPSED_SIDEBAR_WIDTH = 56;
+
+function clampSidebarWidth(
+  width: number,
+) {
+  return Math.min(
+    MAX_SIDEBAR_WIDTH,
+    Math.max(
+      MIN_SIDEBAR_WIDTH,
+      width,
+    ),
+  );
+}
+
+/* ====================================================== */
+/* MAIN SIDEBAR                                           */
+/* ====================================================== */
 
 export default function Sidebar({
   theme,
@@ -107,7 +138,12 @@ export default function Sidebar({
   pinnedChats,
   recentChats,
 
+  projects,
+
+  activeProjectId,
   activeConversationId,
+
+  onOpenProject,
 
   onNewChat,
   onNavigate,
@@ -119,187 +155,613 @@ export default function Sidebar({
   onDeleteConversation,
   onRenameConversation,
 }: SidebarProps) {
+  const asideRef =
+    useRef<HTMLElement | null>(
+      null,
+    );
+
+  const resizingRef =
+    useRef(false);
+
+  const sidebarWidthRef =
+    useRef(
+      DEFAULT_SIDEBAR_WIDTH,
+    );
+
+  const [
+    sidebarWidth,
+    setSidebarWidth,
+  ] = useState(
+    DEFAULT_SIDEBAR_WIDTH,
+  );
+
+  const [
+    resizing,
+    setResizing,
+  ] = useState(false);
+
+  const hasSidebarContent =
+    projects.length > 0 ||
+    pinnedChats.length > 0 ||
+    recentChats.length > 0;
+
+  /* ==================================================== */
+  /* RESTORE WIDTH                                        */
+  /* ==================================================== */
+
+  useEffect(() => {
+  let frameId: number | null = null;
+
+  try {
+    const saved =
+      window.localStorage.getItem(
+        SIDEBAR_WIDTH_KEY,
+      );
+
+    if (!saved) {
+      return;
+    }
+
+    const parsed =
+      Number(saved);
+
+    if (
+      !Number.isFinite(
+        parsed,
+      )
+    ) {
+      return;
+    }
+
+    const next =
+      clampSidebarWidth(
+        parsed,
+      );
+
+    sidebarWidthRef.current =
+      next;
+
+    /*
+     * Restore the persisted width after the effect itself,
+     * avoiding a synchronous state update inside useEffect.
+     */
+    frameId =
+      window.requestAnimationFrame(
+        () => {
+          setSidebarWidth(
+            next,
+          );
+        },
+      );
+  } catch {
+    // localStorage unavailable.
+  }
+
+  return () => {
+    if (
+      frameId !== null
+    ) {
+      window.cancelAnimationFrame(
+        frameId,
+      );
+    }
+  };
+}, []);
+
+  /* ==================================================== */
+  /* RESIZE LISTENERS                                     */
+  /* ==================================================== */
+
+  useEffect(() => {
+    function handlePointerMove(
+      event: PointerEvent,
+    ) {
+      if (
+        !resizingRef.current
+      ) {
+        return;
+      }
+
+      const left =
+        asideRef.current
+          ?.getBoundingClientRect()
+          .left ?? 0;
+
+      const requestedWidth =
+        event.clientX -
+        left;
+
+      const next =
+        clampSidebarWidth(
+          requestedWidth,
+        );
+
+      sidebarWidthRef.current =
+        next;
+
+      setSidebarWidth(
+        next,
+      );
+    }
+
+    function stopResizing() {
+      if (
+        !resizingRef.current
+      ) {
+        return;
+      }
+
+      resizingRef.current =
+        false;
+
+      setResizing(false);
+
+      document.body.style.cursor =
+        "";
+
+      document.body.style.userSelect =
+        "";
+
+      try {
+        window.localStorage.setItem(
+          SIDEBAR_WIDTH_KEY,
+
+          String(
+            sidebarWidthRef.current,
+          ),
+        );
+      } catch {
+        // localStorage unavailable.
+      }
+    }
+
+    window.addEventListener(
+      "pointermove",
+      handlePointerMove,
+    );
+
+    window.addEventListener(
+      "pointerup",
+      stopResizing,
+    );
+
+    window.addEventListener(
+      "pointercancel",
+      stopResizing,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "pointermove",
+        handlePointerMove,
+      );
+
+      window.removeEventListener(
+        "pointerup",
+        stopResizing,
+      );
+
+      window.removeEventListener(
+        "pointercancel",
+        stopResizing,
+      );
+
+      document.body.style.cursor =
+        "";
+
+      document.body.style.userSelect =
+        "";
+    };
+  }, []);
+
+  function startResizing(
+    event:
+      ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    if (collapsed) {
+      return;
+    }
+
+    event.preventDefault();
+
+    resizingRef.current =
+      true;
+
+    setResizing(true);
+
+    document.body.style.cursor =
+      "col-resize";
+
+    document.body.style.userSelect =
+      "none";
+  }
+
+  function resetSidebarWidth() {
+    sidebarWidthRef.current =
+      DEFAULT_SIDEBAR_WIDTH;
+
+    setSidebarWidth(
+      DEFAULT_SIDEBAR_WIDTH,
+    );
+
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_WIDTH_KEY,
+
+        String(
+          DEFAULT_SIDEBAR_WIDTH,
+        ),
+      );
+    } catch {
+      // localStorage unavailable.
+    }
+  }
+
+  /* ==================================================== */
+  /* UI                                                   */
+  /* ==================================================== */
+
   return (
     <motion.aside
+      ref={asideRef}
       initial={false}
       animate={{
-        width: collapsed ? 52 : 250,
+        width: collapsed
+          ? COLLAPSED_SIDEBAR_WIDTH
+          : sidebarWidth,
       }}
-      transition={{
-        type: "spring",
-        stiffness: 290,
-        damping: 31,
-      }}
+      transition={
+        resizing
+          ? {
+              duration: 0,
+            }
+          : {
+              type: "spring",
+              stiffness: 300,
+              damping: 32,
+            }
+      }
       className={cn(
-        "relative hidden h-screen shrink-0 border-r xl:flex",
+        "relative flex h-screen shrink-0 overflow-x-hidden border-r",
 
         theme === "dark"
-          ? collapsed
-            ? "border-white/[0.055] bg-[#0b0b0b]"
-            : "border-white/[0.055] bg-[#181818]"
-          : collapsed
-            ? "border-black/[0.08] bg-white"
-            : "border-black/[0.08] bg-[#f3f3f3]",
+          ? "border-white/[0.055] bg-[#090909] text-white"
+          : "border-black/[0.08] bg-[#f7f7f7] text-[#171717]",
       )}
     >
+      {/* RESIZE HANDLE */}
+
+      {!collapsed ? (
+        <button
+          type="button"
+          aria-label="Resize sidebar"
+          title="Drag to resize • Double-click to reset"
+          onPointerDown={
+            startResizing
+          }
+          onDoubleClick={
+            resetSidebarWidth
+          }
+          className="group absolute -right-[4px] top-0 z-[450] h-full w-[8px] cursor-col-resize"
+        >
+          <span
+            className={cn(
+              "absolute left-1/2 top-0 h-full w-[2px] -translate-x-1/2 transition-all duration-150",
+
+              resizing
+                ? "opacity-100"
+                : "opacity-0 group-hover:opacity-100",
+
+              theme === "dark"
+                ? "bg-white/20"
+                : "bg-black/20",
+            )}
+          />
+        </button>
+      ) : null}
+
       <div
         className={cn(
           "flex h-full w-full min-w-0 flex-col",
+
           collapsed
-            ? "px-1 pb-2 pt-3"
+            ? "px-2 pb-2 pt-3"
             : "px-3 pb-3 pt-4",
         )}
       >
         {/* BRAND */}
 
-        <div className="flex h-11 items-center">
+        <div className="flex h-11 shrink-0 items-center">
           {!collapsed ? (
             <>
               <div className="flex min-w-0 flex-1 items-center px-2">
                 <ClawbitMark
                   variant="horizontal"
-                  iconClassName={cn(
-                    "h-[23px] w-[23px]",
-                    theme === "dark"
-                      ? "text-white"
-                      : "text-black",
-                  )}
+                  iconClassName="h-[23px] w-[23px]"
                   wordmarkClassName={cn(
                     "text-[17px] font-semibold tracking-[-0.035em]",
+
                     theme === "dark"
                       ? "text-white"
-                      : "text-black",
+                      : "text-[#111111]",
                   )}
                 />
               </div>
 
               <SidebarIconButton
                 label="Close sidebar"
-                icon={PanelLeftClose}
+                icon={
+                  PanelLeftClose
+                }
                 theme={theme}
-                onClick={onToggleCollapsed}
+                onClick={
+                  onToggleCollapsed
+                }
               />
             </>
           ) : (
-            <div className="flex w-full justify-center">
-              <CollapsedBrandButton
-                theme={theme}
-                onClick={onToggleCollapsed}
-              />
-            </div>
+            <CollapsedBrandButton
+              theme={theme}
+              onClick={
+                onToggleCollapsed
+              }
+            />
           )}
         </div>
 
         {/* TOP ACTIONS */}
 
-        <div className={collapsed ? "mt-4" : "mt-7"}>
+        <div
+          className={cn(
+            "shrink-0 space-y-1",
+
+            collapsed
+              ? "mt-4"
+              : "mt-5",
+          )}
+        >
           <SidebarAction
-            icon={Plus}
+            icon={SquarePen}
             label="New chat"
-            collapsed={collapsed}
+            collapsed={
+              collapsed
+            }
             theme={theme}
-            onClick={onNewChat}
+            active={false}
+            onClick={
+              onNewChat
+            }
           />
 
-          <div className="mt-1">
-            <SidebarAction
-              icon={Search}
-              label="Search"
-              collapsed={collapsed}
-              theme={theme}
-              onClick={onOpenCommandPalette}
-              shortcut="Ctrl K"
-            />
-          </div>
+          <SidebarAction
+            icon={Search}
+            label="Search"
+            collapsed={
+              collapsed
+            }
+            theme={theme}
+            active={false}
+            shortcut="Ctrl K"
+            onClick={
+              onOpenCommandPalette
+            }
+          />
         </div>
 
-        {/* NAV */}
+        {/* NAVIGATION */}
 
-        <nav className="mt-5 space-y-1">
-          {navigationItems.map((item) => (
-            <SidebarAction
-              key={item.id}
-              icon={item.icon}
-              label={item.label}
-              collapsed={collapsed}
-              theme={theme}
-              active={
-                activeView === item.id
-              }
-              onClick={() =>
-                onNavigate(item.id)
-              }
-            />
-          ))}
+        <nav
+          aria-label="Primary navigation"
+          className="mt-5 shrink-0 space-y-1"
+        >
+          {navigationItems.map(
+            (
+              item,
+            ) => (
+              <SidebarAction
+                key={
+                  item.id
+                }
+                icon={
+                  item.icon
+                }
+                label={
+                  item.label
+                }
+                collapsed={
+                  collapsed
+                }
+                theme={
+                  theme
+                }
+                active={
+                  activeView ===
+                  item.id
+                }
+                onClick={() =>
+                  onNavigate(
+                    item.id,
+                  )
+                }
+              />
+            ),
+          )}
         </nav>
 
         {/* HISTORY */}
 
-        {!collapsed ? (
-          <div className="mt-7 min-h-0 flex-1 overflow-y-auto px-1">
-            <ConversationSection
-              title="Pinned"
-              items={pinnedChats}
-              theme={theme}
-              activeConversationId={
-                activeConversationId
-              }
-              onOpenConversation={
-                onOpenConversation
-              }
-              onTogglePinConversation={
-                onTogglePinConversation
-              }
-              onDeleteConversation={
-                onDeleteConversation
-              }
-              onRenameConversation={
-                onRenameConversation
-              }
-            />
+        {!collapsed &&
+        hasSidebarContent ? (
+          <div className="mt-6 min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-0.5 pb-4">
+            {projects.length >
+            0 ? (
+              <SidebarSection
+                title="Projects"
+                theme={theme}
+              >
+                <div className="space-y-[2px]">
+                  {projects.map(
+                    (
+                      project,
+                    ) => {
+                      const active =
+                        activeView ===
+                          "chats" &&
+                        activeProjectId ===
+                          project.id;
 
-            <ConversationSection
-              title="Recent"
-              items={recentChats}
-              theme={theme}
-              activeConversationId={
-                activeConversationId
-              }
-              onOpenConversation={
-                onOpenConversation
-              }
-              onTogglePinConversation={
-                onTogglePinConversation
-              }
-              onDeleteConversation={
-                onDeleteConversation
-              }
-              onRenameConversation={
-                onRenameConversation
-              }
-              className="mt-7"
-            />
+                      return (
+                        <button
+                          key={
+                            project.id
+                          }
+                          type="button"
+                          title={
+                            project.name
+                          }
+                          aria-current={
+                            active
+                              ? "true"
+                              : undefined
+                          }
+                          onClick={() =>
+                            onOpenProject(
+                              project.id,
+                            )
+                          }
+                          className={cn(
+                            "flex h-[40px] w-full min-w-0 items-center gap-3 rounded-[9px] px-2.5 text-left text-[13px] transition-colors",
+
+                            active
+                              ? theme ===
+                                "dark"
+                                ? "bg-white/[0.09] text-white"
+                                : "bg-black/[0.075] text-[#111111]"
+                              : theme ===
+                                "dark"
+                                ? "text-zinc-300 hover:bg-white/[0.055] hover:text-white"
+                                : "text-zinc-700 hover:bg-black/[0.045] hover:text-black",
+                          )}
+                        >
+                          <Folder
+                            size={
+                              17
+                            }
+                            strokeWidth={
+                              1.8
+                            }
+                            className="shrink-0"
+                          />
+
+                          <span className="min-w-0 flex-1 truncate font-normal">
+                            {
+                              project.name
+                            }
+                          </span>
+                        </button>
+                      );
+                    },
+                  )}
+                </div>
+              </SidebarSection>
+            ) : null}
+
+            {pinnedChats.length >
+            0 ? (
+              <ConversationSection
+                title="Pinned"
+                items={
+                  pinnedChats
+                }
+                theme={
+                  theme
+                }
+                activeConversationId={
+                  activeConversationId
+                }
+                onOpenConversation={
+                  onOpenConversation
+                }
+                onTogglePinConversation={
+                  onTogglePinConversation
+                }
+                onDeleteConversation={
+                  onDeleteConversation
+                }
+                onRenameConversation={
+                  onRenameConversation
+                }
+                className={
+                  projects.length >
+                  0
+                    ? "mt-6"
+                    : undefined
+                }
+              />
+            ) : null}
+
+            {recentChats.length >
+            0 ? (
+              <ConversationSection
+                title="Recent"
+                items={
+                  recentChats
+                }
+                theme={
+                  theme
+                }
+                activeConversationId={
+                  activeConversationId
+                }
+                onOpenConversation={
+                  onOpenConversation
+                }
+                onTogglePinConversation={
+                  onTogglePinConversation
+                }
+                onDeleteConversation={
+                  onDeleteConversation
+                }
+                onRenameConversation={
+                  onRenameConversation
+                }
+                className={
+                  projects.length >
+                    0 ||
+                  pinnedChats.length >
+                    0
+                    ? "mt-6"
+                    : undefined
+                }
+              />
+            ) : null}
           </div>
         ) : (
           <div className="flex-1" />
         )}
 
-        {/* ACCOUNT ONLY */}
+        {/* ACCOUNT */}
 
         <div
           className={cn(
-            collapsed
-              ? "mt-3 border-t px-0 pt-2"
-              : "mt-4 border-t pt-3",
+            "shrink-0 border-t pt-2",
+
             theme === "dark"
               ? "border-white/[0.06]"
               : "border-black/[0.08]",
           )}
         >
           <AccountMenu
-            collapsed={collapsed}
             theme={theme}
-            onNavigate={onNavigate}
+            collapsed={
+              collapsed
+            }
+            activeView={
+              activeView
+            }
+            onNavigate={
+              onNavigate
+            }
           />
         </div>
       </div>
@@ -307,96 +769,125 @@ export default function Sidebar({
   );
 }
 
-/* ------------------------------------------------ */
-/* SIDEBAR BUTTON */
-/* ------------------------------------------------ */
+/* ====================================================== */
+/* SECTION LABEL                                          */
+/* ====================================================== */
+
+function SidebarSection({
+  title,
+  children,
+  theme,
+}: {
+  title: string;
+  children: ReactNode;
+  theme: Theme;
+}) {
+  return (
+    <section aria-label={title}>
+      <p
+        className={cn(
+          "mb-1.5 px-2.5 text-[11px] font-normal",
+
+          theme === "dark"
+            ? "text-zinc-600"
+            : "text-zinc-500",
+        )}
+      >
+        {title}
+      </p>
+
+      {children}
+    </section>
+  );
+}
+
+/* ====================================================== */
+/* SIDEBAR ACTION                                         */
+/* ====================================================== */
 
 function SidebarAction({
   icon: Icon,
   label,
   collapsed,
   theme,
-  active = false,
+  active,
   shortcut,
   onClick,
 }: {
   icon: ComponentType<{
     size?: number;
+    strokeWidth?: number;
+    className?: string;
   }>;
 
   label: string;
   collapsed: boolean;
   theme: Theme;
+  active: boolean;
 
-  active?: boolean;
   shortcut?: string;
 
   onClick: () => void;
 }) {
-  const [hovered, setHovered] =
-    useState(false);
+  const [
+    hovered,
+    setHovered,
+  ] = useState(false);
 
   return (
     <div className="relative">
-      <motion.button
+      <button
         type="button"
+        aria-label={
+          label
+        }
+        aria-current={
+          active
+            ? "page"
+            : undefined
+        }
+        onClick={
+          onClick
+        }
         onMouseEnter={() =>
           setHovered(true)
         }
         onMouseLeave={() =>
           setHovered(false)
         }
-        onClick={onClick}
-        whileHover={
-          collapsed
-            ? {
-                scale: 1.08,
-                y: -1,
-              }
-            : {
-                x: 2,
-                scale: 1.005,
-              }
+        onFocus={() =>
+          setHovered(true)
         }
-        whileTap={{
-          scale: 0.96,
-        }}
-        transition={{
-          type: "spring",
-          stiffness: 430,
-          damping: 28,
-        }}
+        onBlur={() =>
+          setHovered(false)
+        }
         className={cn(
-          "flex h-[42px] w-full items-center rounded-[11px] text-[13px] font-normal",
+          "flex h-[42px] items-center rounded-[9px] text-[13px] transition-colors",
 
           collapsed
-            ? "mx-auto h-10 w-10 justify-center"
-            : "gap-3 px-3",
+            ? "mx-auto w-10 justify-center px-0"
+            : "w-full gap-3 px-2.5",
 
           active
             ? theme === "dark"
-              ? "bg-[#2a2a2a] text-white"
-              : "bg-black/[0.07] text-black"
+              ? "bg-white/[0.09] text-white"
+              : "bg-black/[0.075] text-black"
             : theme === "dark"
-              ? "text-zinc-400 hover:bg-[#303030] hover:text-white"
-              : "text-zinc-600 hover:bg-black/[0.055] hover:text-black",
+              ? "text-zinc-300 hover:bg-white/[0.055] hover:text-white"
+              : "text-zinc-700 hover:bg-black/[0.045] hover:text-black",
         )}
       >
-        <motion.span
-          animate={{
-            scale: hovered ? 1.08 : 1,
-          }}
-          transition={{
-            duration: 0.14,
-          }}
-          className="flex shrink-0 items-center justify-center"
-        >
-          <Icon size={18} />
-        </motion.span>
+        <Icon
+          size={18}
+          strokeWidth={
+            1.85
+          }
+          className="shrink-0"
+        />
 
         {!collapsed ? (
           <>
-            <span className="flex-1 text-left font-normal">
+            <span className="min-w-0 flex-1 truncate text-left font-normal">
               {label}
             </span>
 
@@ -407,50 +898,35 @@ function SidebarAction({
 
                   theme === "dark"
                     ? "border-white/[0.08] text-zinc-600"
-                    : "border-black/[0.09] text-zinc-400",
+                    : "border-black/[0.10] text-zinc-500",
                 )}
               >
-                {shortcut}
+                {
+                  shortcut
+                }
               </span>
             ) : null}
           </>
         ) : null}
-      </motion.button>
+      </button>
 
       <AnimatePresence>
-        {collapsed && hovered ? (
-          <motion.div
-            initial={{
-              opacity: 0,
-              x: -5,
-              scale: 0.97,
-            }}
-            animate={{
-              opacity: 1,
-              x: 0,
-              scale: 1,
-            }}
-            exit={{
-              opacity: 0,
-              x: -4,
-              scale: 0.97,
-            }}
-            transition={{
-              duration: 0.13,
-            }}
-            className="pointer-events-none absolute left-[48px] top-1/2 z-[300] -translate-y-1/2 whitespace-nowrap rounded-[9px] border border-white/[0.08] bg-[#303030] px-3 py-2 text-[12px] font-medium text-white shadow-xl"
+        {collapsed &&
+        hovered ? (
+          <SidebarTooltip
+            theme={theme}
           >
             {label}
-          </motion.div>
+          </SidebarTooltip>
         ) : null}
       </AnimatePresence>
     </div>
   );
 }
 
-/* ------------------------------------------------ */
-/* COLLAPSED BRAND / OPEN SIDEBAR */
-/* ------------------------------------------------ */
+/* ====================================================== */
+/* COLLAPSED BUTTON                                       */
+/* ====================================================== */
 
 function CollapsedBrandButton({
   theme,
@@ -459,154 +935,181 @@ function CollapsedBrandButton({
   theme: Theme;
   onClick: () => void;
 }) {
-  const [hovered, setHovered] =
-    useState(false);
+  const [
+    hovered,
+    setHovered,
+  ] = useState(false);
 
   return (
-    <div className="relative">
-      <motion.button
+    <div className="relative flex w-full justify-center">
+      <button
         type="button"
         aria-label="Open sidebar"
-        onClick={onClick}
+        onClick={
+          onClick
+        }
         onMouseEnter={() =>
           setHovered(true)
         }
         onMouseLeave={() =>
           setHovered(false)
         }
-        whileHover={{
-          scale: 1.09,
-          y: -1,
-        }}
-        whileTap={{
-          scale: 0.94,
-        }}
         className={cn(
-          "flex h-10 w-10 items-center justify-center rounded-[11px]",
+          "flex h-10 w-10 items-center justify-center rounded-[9px] transition-colors",
+
           theme === "dark"
-            ? "hover:bg-[#303030]"
-            : "hover:bg-black/[0.055]",
+            ? "text-zinc-500 hover:bg-white/[0.055] hover:text-white"
+            : "text-zinc-500 hover:bg-black/[0.045] hover:text-black",
         )}
       >
-        <ClawbitMark
-          className={cn(
-            "h-[22px] w-[22px]",
-            theme === "dark"
-              ? "text-white"
-              : "text-black",
-          )}
+        <PanelLeftClose
+          size={18}
+          className="rotate-180"
         />
-      </motion.button>
+      </button>
 
       <AnimatePresence>
         {hovered ? (
-          <motion.div
-            initial={{
-              opacity: 0,
-              x: -4,
-              scale: 0.97,
-            }}
-            animate={{
-              opacity: 1,
-              x: 0,
-              scale: 1,
-            }}
-            exit={{
-              opacity: 0,
-              x: -3,
-              scale: 0.97,
-            }}
-            transition={{
-              duration: 0.13,
-            }}
-            className="pointer-events-none absolute left-[48px] top-1/2 z-[300] -translate-y-1/2 whitespace-nowrap rounded-[9px] border border-white/[0.08] bg-[#303030] px-3 py-2 text-[12px] font-medium text-white shadow-xl"
+          <SidebarTooltip
+            theme={theme}
           >
             Open sidebar
-          </motion.div>
+          </SidebarTooltip>
         ) : null}
       </AnimatePresence>
     </div>
   );
 }
 
-/* ------------------------------------------------ */
-/* COLLAPSE BUTTON */
-/* ------------------------------------------------ */
+/* ====================================================== */
+/* ICON BUTTON                                            */
+/* ====================================================== */
 
 function SidebarIconButton({
-  icon: Icon,
   label,
+  icon: Icon,
   theme,
   onClick,
 }: {
+  label: string;
+
   icon: ComponentType<{
     size?: number;
   }>;
 
-  label: string;
   theme: Theme;
+
   onClick: () => void;
 }) {
   return (
-    <motion.button
+    <button
       type="button"
-      title={label}
-      whileHover={{
-        scale: 1.05,
-      }}
-      whileTap={{
-        scale: 0.94,
-      }}
-      onClick={onClick}
+      aria-label={
+        label
+      }
+      title={
+        label
+      }
+      onClick={
+        onClick
+      }
       className={cn(
-        "flex h-10 w-10 items-center justify-center rounded-[11px]",
+        "flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] transition-colors",
 
         theme === "dark"
-          ? "text-zinc-500 hover:bg-[#2d2d2d] hover:text-white"
-          : "text-zinc-500 hover:bg-black/[0.055] hover:text-black",
+          ? "text-zinc-500 hover:bg-white/[0.055] hover:text-white"
+          : "text-zinc-500 hover:bg-black/[0.045] hover:text-black",
       )}
     >
-      <Icon size={18} />
-    </motion.button>
+      <Icon
+        size={
+          17
+        }
+      />
+    </button>
   );
 }
 
-/* ------------------------------------------------ */
-/* CHAT LIST */
-/* ------------------------------------------------ */
+/* ====================================================== */
+/* TOOLTIP                                                */
+/* ====================================================== */
+
+function SidebarTooltip({
+  theme,
+  children,
+}: {
+  theme: Theme;
+  children: ReactNode;
+}) {
+  return (
+    <motion.div
+      initial={{
+        opacity: 0,
+        x: -5,
+      }}
+      animate={{
+        opacity: 1,
+        x: 0,
+      }}
+      exit={{
+        opacity: 0,
+        x: -5,
+      }}
+      transition={{
+        duration:
+          0.12,
+      }}
+      className={cn(
+        "pointer-events-none absolute left-[48px] top-1/2 z-[700] -translate-y-1/2 whitespace-nowrap rounded-[8px] border px-2.5 py-1.5 text-[12px] shadow-lg",
+
+        theme === "dark"
+          ? "border-white/[0.08] bg-[#202020] text-white"
+          : "border-black/[0.10] bg-white text-[#181818]",
+      )}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+/* ====================================================== */
+/* CONVERSATIONS                                          */
+/* ====================================================== */
 
 function ConversationSection({
   title,
   items,
   theme,
-
   activeConversationId,
-
   onOpenConversation,
   onTogglePinConversation,
   onDeleteConversation,
   onRenameConversation,
-
   className,
 }: {
   title: string;
 
-  items: SidebarConversation[];
+  items:
+    SidebarConversation[];
 
-  theme: Theme;
+  theme:
+    Theme;
 
   activeConversationId:
     | string
     | null;
 
-  onOpenConversation:
-    (id: string) => void;
+  onOpenConversation: (
+    id: string,
+  ) => void;
 
-  onTogglePinConversation:
-    (id: string) => void;
+  onTogglePinConversation: (
+    id: string,
+  ) => void;
 
-  onDeleteConversation:
-    (id: string) => void;
+  onDeleteConversation: (
+    id: string,
+  ) => void;
 
   onRenameConversation: (
     id: string,
@@ -618,24 +1121,28 @@ function ConversationSection({
   const [
     editingId,
     setEditingId,
-  ] = useState<
-    string | null
-  >(null);
+  ] =
+    useState<
+      string | null
+    >(null);
 
   const [
     draftTitle,
     setDraftTitle,
-  ] = useState("");
-
-  if (items.length === 0) {
-    return null;
-  }
+  ] =
+    useState("");
 
   function startRename(
-    item: SidebarConversation,
+    item:
+      SidebarConversation,
   ) {
-    setEditingId(item.id);
-    setDraftTitle(item.title);
+    setEditingId(
+      item.id,
+    );
+
+    setDraftTitle(
+      item.title,
+    );
   }
 
   function finishRename(
@@ -651,190 +1158,222 @@ function ConversationSection({
       );
     }
 
-    setEditingId(null);
-    setDraftTitle("");
+    setEditingId(
+      null,
+    );
+
+    setDraftTitle(
+      "",
+    );
   }
 
   return (
-    <section className={className}>
+    <section
+      aria-label={
+        title
+      }
+      className={
+        className
+      }
+    >
       <p
         className={cn(
-          "mb-2 px-2 text-[11px] font-medium",
+          "mb-1.5 px-2.5 text-[11px] font-normal",
 
           theme === "dark"
-            ? "text-zinc-500"
-            : "text-zinc-400",
+            ? "text-zinc-600"
+            : "text-zinc-500",
         )}
       >
         {title}
       </p>
 
       <div className="space-y-[2px]">
-        {items.map((item) => {
-          const active =
-            activeConversationId ===
-            item.id;
+        {items.map(
+          (
+            item,
+          ) => {
+            const active =
+              activeConversationId ===
+              item.id;
 
-          const editing =
-            editingId === item.id;
+            const editing =
+              editingId ===
+              item.id;
 
-          return (
-            <div
-              key={item.id}
-              className={cn(
-                "group flex h-[38px] items-center rounded-[10px] px-2",
+            return (
+              <div
+                key={
+                  item.id
+                }
+                className={cn(
+                  "group flex h-[40px] items-center rounded-[9px] px-2 transition-colors",
 
-                active
-                  ? theme === "dark"
-                    ? "bg-[#2a2a2a]"
-                    : "bg-black/[0.07]"
-                  : theme === "dark"
-                    ? "hover:bg-[#2d2d2d]"
-                    : "hover:bg-black/[0.05]",
-              )}
-            >
-              {editing ? (
-                <input
-                  autoFocus
-                  value={draftTitle}
-                  onChange={(event) =>
-                    setDraftTitle(
-                      event.target.value,
-                    )
-                  }
-                  onBlur={() =>
-                    finishRename(
-                      item.id,
-                    )
-                  }
-                  onKeyDown={(event) => {
-                    if (
-                      event.key ===
-                      "Enter"
-                    ) {
+                  active
+                    ? theme ===
+                      "dark"
+                      ? "bg-white/[0.09]"
+                      : "bg-black/[0.075]"
+                    : theme ===
+                      "dark"
+                      ? "hover:bg-white/[0.045]"
+                      : "hover:bg-black/[0.035]",
+                )}
+              >
+                {editing ? (
+                  <input
+                    autoFocus
+                    value={
+                      draftTitle
+                    }
+                    onChange={(
+                      event,
+                    ) =>
+                      setDraftTitle(
+                        event
+                          .target
+                          .value,
+                      )
+                    }
+                    onBlur={() =>
                       finishRename(
                         item.id,
-                      );
+                      )
                     }
+                    onKeyDown={(
+                      event,
+                    ) => {
+                      if (
+                        event.key ===
+                        "Enter"
+                      ) {
+                        finishRename(
+                          item.id,
+                        );
+                      }
 
-                    if (
-                      event.key ===
-                      "Escape"
-                    ) {
-                      setEditingId(
-                        null,
-                      );
+                      if (
+                        event.key ===
+                        "Escape"
+                      ) {
+                        setEditingId(
+                          null,
+                        );
+
+                        setDraftTitle(
+                          "",
+                        );
+                      }
+                    }}
+                    className={cn(
+                      "min-w-0 flex-1 rounded-[7px] border px-2 py-1 text-[13px] outline-none shadow-none",
+
+                      theme === "dark"
+                        ? "border-white/[0.11] bg-[#151515] text-white focus:border-white/[0.18]"
+                        : "border-black/[0.12] bg-white text-[#171717] focus:border-black/[0.20]",
+                    )}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    title={
+                      item.title
                     }
-                  }}
-                  className={cn(
-                    "min-w-0 flex-1 rounded-[7px] border px-2 py-1 text-[13px] font-normal outline-none",
+                    onClick={() =>
+                      onOpenConversation(
+                        item.id,
+                      )
+                    }
+                    className={cn(
+                      "min-w-0 flex-1 truncate bg-transparent text-left text-[13px] font-normal",
 
-                    theme === "dark"
-                      ? "border-white/[0.12] bg-[#202020] text-white"
-                      : "border-black/[0.12] bg-white text-black",
-                  )}
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() =>
-                    onOpenConversation(
-                      item.id,
-                    )
-                  }
-                  className={cn(
-                    "min-w-0 flex-1 truncate text-left text-[13px] font-normal",
-
-                    active
-                      ? theme ===
-                        "dark"
-                        ? "text-white"
-                        : "text-black"
-                      : theme ===
+                      active
+                        ? theme ===
                           "dark"
-                        ? "text-zinc-300"
-                        : "text-zinc-700",
-                  )}
-                >
-                  {item.title}
-                </button>
-              )}
+                          ? "text-white"
+                          : "text-black"
+                        : theme ===
+                          "dark"
+                          ? "text-zinc-300"
+                          : "text-zinc-700",
+                    )}
+                  >
+                    {
+                      item.title
+                    }
+                  </button>
+                )}
 
-              {!editing ? (
-                <ConversationMenu
-                  item={item}
-                  theme={theme}
-                  onRename={() =>
-                    startRename(item)
-                  }
-                  onTogglePin={() =>
-                    onTogglePinConversation(
-                      item.id,
-                    )
-                  }
-                  onDelete={() =>
-                    onDeleteConversation(
-                      item.id,
-                    )
-                  }
-                />
-              ) : null}
-            </div>
-          );
-        })}
+                {!editing ? (
+                  <ConversationMenu
+                    theme={
+                      theme
+                    }
+                    item={
+                      item
+                    }
+                    onRename={() =>
+                      startRename(
+                        item,
+                      )
+                    }
+                    onTogglePin={() =>
+                      onTogglePinConversation(
+                        item.id,
+                      )
+                    }
+                    onDelete={() =>
+                      onDeleteConversation(
+                        item.id,
+                      )
+                    }
+                  />
+                ) : null}
+              </div>
+            );
+          },
+        )}
       </div>
     </section>
   );
 }
 
-/* ------------------------------------------------ */
-/* THREE DOT CHAT MENU */
-/* ------------------------------------------------ */
+/* ====================================================== */
+/* CONVERSATION MENU                                      */
+/* ====================================================== */
 
 function ConversationMenu({
-  item,
   theme,
+  item,
   onRename,
   onTogglePin,
   onDelete,
 }: {
-  item: SidebarConversation;
   theme: Theme;
 
-  onRename: () => void;
-  onTogglePin: () => void;
-  onDelete: () => void;
+  item:
+    SidebarConversation;
+
+  onRename:
+    () => void;
+
+  onTogglePin:
+    () => void;
+
+  onDelete:
+    () => void;
 }) {
-  const [open, setOpen] =
-    useState(false);
-
-  async function shareConversation() {
-    const url =
-      window.location.href;
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: item.title,
-          text: item.preview,
-          url,
-        });
-
-        return;
-      }
-
-      await navigator.clipboard.writeText(
-        url,
-      );
-    } catch {
-      // User cancelled sharing.
-    }
-  }
+  const [
+    open,
+    setOpen,
+  ] = useState(false);
 
   return (
     <DropdownMenu.Root
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={
+        setOpen
+      }
     >
       <DropdownMenu.Trigger
         asChild
@@ -842,19 +1381,23 @@ function ConversationMenu({
         <button
           type="button"
           aria-label="Conversation options"
+          title="Conversation options"
           className={cn(
-            "ml-1 h-7 w-7 shrink-0 items-center justify-center rounded-[7px]",
+            "ml-1 h-7 w-7 shrink-0 items-center justify-center rounded-[7px] transition-colors",
+
             open
               ? "flex"
               : "hidden group-hover:flex",
 
             theme === "dark"
-              ? "text-zinc-500 hover:bg-white/[0.08] hover:text-white"
-              : "text-zinc-400 hover:bg-black/[0.07] hover:text-black",
+              ? "text-zinc-500 hover:bg-white/[0.07] hover:text-white"
+              : "text-zinc-500 hover:bg-black/[0.055] hover:text-black",
           )}
         >
           <MoreHorizontal
-            size={17}
+            size={
+              17
+            }
           />
         </button>
       </DropdownMenu.Trigger>
@@ -863,58 +1406,72 @@ function ConversationMenu({
         <DropdownMenu.Content
           side="right"
           align="center"
-          sideOffset={8}
-          collisionPadding={10}
+          sideOffset={
+            8
+          }
+          collisionPadding={
+            10
+          }
           className={cn(
-            "z-[400] w-[210px] rounded-[16px] border p-1.5 shadow-[0_24px_70px_rgba(0,0,0,0.6)]",
+            "z-[600] w-[190px] rounded-[14px] border p-1.5 shadow-[0_18px_50px_rgba(0,0,0,0.18)]",
 
             theme === "dark"
-              ? "border-white/[0.08] bg-[#2b2b2b] text-white"
-              : "border-black/[0.10] bg-white text-black",
+              ? "border-white/[0.09] bg-[#181818] text-white"
+              : "border-black/[0.10] bg-white text-[#171717]",
           )}
         >
           <ConversationMenuItem
-            icon={Share2}
-            label="Share conversation"
-            theme={theme}
-            onSelect={() =>
-              void shareConversation()
+            theme={
+              theme
             }
-          />
-
-          <ConversationMenuItem
-            icon={Pin}
+            icon={
+              Pin
+            }
             label={
               item.pinned
                 ? "Unpin"
                 : "Pin"
             }
-            theme={theme}
-            onSelect={onTogglePin}
+            onSelect={
+              onTogglePin
+            }
           />
 
           <ConversationMenuItem
-            icon={Pencil}
+            theme={
+              theme
+            }
+            icon={
+              Pencil
+            }
             label="Rename"
-            theme={theme}
-            onSelect={onRename}
+            onSelect={
+              onRename
+            }
           />
 
           <div
             className={cn(
               "my-1 border-t",
+
               theme === "dark"
-                ? "border-white/[0.08]"
+                ? "border-white/[0.07]"
                 : "border-black/[0.08]",
             )}
           />
 
           <ConversationMenuItem
-            icon={Trash2}
+            theme={
+              theme
+            }
+            icon={
+              Trash2
+            }
             label="Delete"
-            theme={theme}
             destructive
-            onSelect={onDelete}
+            onSelect={
+              onDelete
+            }
           />
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
@@ -923,84 +1480,113 @@ function ConversationMenu({
 }
 
 function ConversationMenuItem({
+  theme,
   icon: Icon,
   label,
-  theme,
   destructive = false,
   onSelect,
 }: {
-  icon: ComponentType<{
-    size?: number;
-  }>;
+  theme: Theme;
+
+  icon:
+    ComponentType<{
+      size?: number;
+    }>;
 
   label: string;
-  theme: Theme;
-  destructive?: boolean;
 
-  onSelect: () => void;
+  destructive?:
+    boolean;
+
+  onSelect:
+    () => void;
 }) {
   return (
     <DropdownMenu.Item
-      onSelect={onSelect}
+      onSelect={
+        onSelect
+      }
       className={cn(
-        "flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] outline-none",
+        "flex cursor-pointer items-center gap-3 rounded-[9px] px-3 py-2.5 text-[13px] outline-none transition-colors",
 
         destructive
-          ? "text-red-400 hover:bg-red-500/[0.08] focus:bg-red-500/[0.08]"
-          : theme === "dark"
-            ? "text-zinc-200 hover:bg-white/[0.07] focus:bg-white/[0.07]"
-            : "text-zinc-700 hover:bg-black/[0.05] focus:bg-black/[0.05]",
+          ? theme ===
+            "dark"
+            ? "text-red-400 hover:bg-red-500/[0.10] focus:bg-red-500/[0.10] data-[highlighted]:bg-red-500/[0.10]"
+            : "text-red-600 hover:bg-red-50 focus:bg-red-50 data-[highlighted]:bg-red-50"
+          : theme ===
+            "dark"
+            ? "text-zinc-200 hover:bg-white/[0.065] focus:bg-white/[0.065] data-[highlighted]:bg-white/[0.065]"
+            : "text-zinc-800 hover:bg-black/[0.05] focus:bg-black/[0.05] data-[highlighted]:bg-black/[0.05]",
       )}
     >
-      <Icon size={16} />
+      <Icon
+        size={
+          16
+        }
+      />
 
       {label}
     </DropdownMenu.Item>
   );
 }
 
-/* ------------------------------------------------ */
-/* ACCOUNT */
-/* ------------------------------------------------ */
+/* ====================================================== */
+/* ACCOUNT MENU                                           */
+/* ====================================================== */
 
 function AccountMenu({
   collapsed,
   theme,
+  activeView,
   onNavigate,
 }: {
   collapsed: boolean;
+
   theme: Theme;
 
-  onNavigate:
-    (view: AppView) => void;
+  activeView:
+    RouteView;
+
+  onNavigate: (
+    view:
+      RouteView,
+  ) => void;
 }) {
-  const [open, setOpen] =
-    useState(false);
+  const [
+    open,
+    setOpen,
+  ] = useState(false);
 
   return (
     <DropdownMenu.Root
       open={open}
-      onOpenChange={setOpen}
+      onOpenChange={
+        setOpen
+      }
     >
       <DropdownMenu.Trigger
         asChild
       >
         <button
           type="button"
+          aria-label="Profile menu"
           className={cn(
-            "mt-1 flex w-full items-center rounded-[12px]",
+            "mt-1 flex w-full items-center rounded-[10px] transition-colors",
 
             collapsed
               ? "mx-auto h-10 w-10 justify-center"
-              : "min-h-[58px] gap-3 px-2.5",
+              : "min-h-[58px] gap-3 px-2",
 
             open
-              ? theme === "dark"
-                ? "bg-[#2d2d2d]"
-                : "bg-black/[0.06]"
-              : theme === "dark"
-                ? "hover:bg-[#2d2d2d]"
-                : "hover:bg-black/[0.05]",
+              ? theme ===
+                "dark"
+                ? "bg-white/[0.075]"
+                : "bg-black/[0.055]"
+              : theme ===
+                "dark"
+                ? "hover:bg-white/[0.05]"
+                : "hover:bg-black/[0.04]",
           )}
         >
           <UserAvatar />
@@ -1008,18 +1594,40 @@ function AccountMenu({
           {!collapsed ? (
             <>
               <div className="min-w-0 flex-1 text-left">
-                <p className="truncate text-[13px] font-medium">
+                <p
+                  className={cn(
+                    "truncate text-[13px] font-medium",
+
+                    theme === "dark"
+                      ? "text-zinc-100"
+                      : "text-zinc-900",
+                  )}
+                >
                   Hassan Kadri
                 </p>
 
-                <p className="mt-0.5 text-[10px] text-zinc-500">
-                  Personal
+                <p
+                  className={cn(
+                    "mt-0.5 text-[10px]",
+
+                    theme === "dark"
+                      ? "text-zinc-600"
+                      : "text-zinc-500",
+                  )}
+                >
+                  Personal workspace
                 </p>
               </div>
 
               <MoreHorizontal
-                size={16}
-                className="text-zinc-500"
+                size={
+                  16
+                }
+                className={
+                  theme === "dark"
+                    ? "text-zinc-600"
+                    : "text-zinc-500"
+                }
               />
             </>
           ) : null}
@@ -1030,37 +1638,68 @@ function AccountMenu({
         <DropdownMenu.Content
           side="top"
           align="center"
-          sideOffset={8}
+          sideOffset={
+            8
+          }
+          collisionPadding={
+            12
+          }
           className={cn(
-            "z-[400] w-[270px] rounded-[18px] border p-2 shadow-[0_24px_80px_rgba(0,0,0,0.7)]",
+            "z-[600] w-[270px] rounded-[17px] border p-2 shadow-[0_18px_55px_rgba(0,0,0,0.18)]",
 
             theme === "dark"
-              ? "border-white/[0.08] bg-[#2b2b2b] text-white"
-              : "border-black/[0.10] bg-white text-black",
+              ? "border-white/[0.09] bg-[#181818] text-white"
+              : "border-black/[0.10] bg-white text-[#171717]",
           )}
         >
           <div className="flex items-center gap-3 px-2.5 py-2.5">
             <UserAvatar />
 
             <div className="min-w-0">
-              <p className="truncate text-[13px] font-medium">
+              <p
+                className={cn(
+                  "truncate text-[13px] font-medium",
+
+                  theme === "dark"
+                    ? "text-white"
+                    : "text-[#171717]",
+                )}
+              >
                 Hassan Kadri
               </p>
 
-              <p className="mt-0.5 text-[11px] text-zinc-500">
-                Personal
+              <p
+                className={cn(
+                  "mt-0.5 text-[11px]",
+
+                  theme === "dark"
+                    ? "text-zinc-500"
+                    : "text-zinc-500",
+                )}
+              >
+                Personal workspace
               </p>
             </div>
           </div>
 
           <MenuDivider
-            theme={theme}
+            theme={
+              theme
+            }
           />
 
           <AccountMenuItem
-            icon={SlidersHorizontal}
+            theme={
+              theme
+            }
+            icon={
+              SlidersHorizontal
+            }
             label="Personalization"
-            theme={theme}
+            active={
+              activeView ===
+              "customize"
+            }
             onSelect={() =>
               onNavigate(
                 "customize",
@@ -1069,20 +1708,36 @@ function AccountMenu({
           />
 
           <AccountMenuItem
-            icon={UserRound}
+            theme={
+              theme
+            }
+            icon={
+              UserRound
+            }
             label="Profile"
-            theme={theme}
+            active={
+              activeView ===
+              "profile"
+            }
             onSelect={() =>
               onNavigate(
-                "customize",
+                "profile",
               )
             }
           />
 
           <AccountMenuItem
-            icon={Settings2}
+            theme={
+              theme
+            }
+            icon={
+              Settings2
+            }
             label="Settings"
-            theme={theme}
+            active={
+              activeView ===
+              "settings"
+            }
             onSelect={() =>
               onNavigate(
                 "settings",
@@ -1091,13 +1746,23 @@ function AccountMenu({
           />
 
           <MenuDivider
-            theme={theme}
+            theme={
+              theme
+            }
           />
 
           <AccountMenuItem
-            icon={CircleHelp}
-            label="Help"
-            theme={theme}
+            theme={
+              theme
+            }
+            icon={
+              CircleHelp
+            }
+            label="Help & Docs"
+            active={
+              activeView ===
+              "help"
+            }
             onSelect={() =>
               onNavigate(
                 "help",
@@ -1111,31 +1776,52 @@ function AccountMenu({
 }
 
 function AccountMenuItem({
+  theme,
   icon: Icon,
   label,
-  theme,
+  active,
   onSelect,
 }: {
-  icon: ComponentType<{
-    size?: number;
-  }>;
-
-  label: string;
   theme: Theme;
-  onSelect: () => void;
+
+  icon:
+    ComponentType<{
+      size?: number;
+    }>;
+
+  label:
+    string;
+
+  active:
+    boolean;
+
+  onSelect:
+    () => void;
 }) {
   return (
     <DropdownMenu.Item
-      onSelect={onSelect}
+      onSelect={
+        onSelect
+      }
       className={cn(
-        "flex cursor-pointer items-center gap-3 rounded-[10px] px-3 py-2.5 text-[13px] outline-none",
+        "flex cursor-pointer items-center gap-3 rounded-[9px] px-3 py-2.5 text-[13px] outline-none transition-colors",
 
-        theme === "dark"
-          ? "text-zinc-200 hover:bg-white/[0.07] focus:bg-white/[0.07]"
-          : "text-zinc-700 hover:bg-black/[0.05] focus:bg-black/[0.05]",
+        active
+          ? theme ===
+            "dark"
+            ? "bg-white/[0.085] text-white"
+            : "bg-black/[0.065] text-black"
+          : theme ===
+            "dark"
+            ? "text-zinc-200 hover:bg-white/[0.06] focus:bg-white/[0.06] data-[highlighted]:bg-white/[0.06]"
+            : "text-zinc-800 hover:bg-black/[0.045] focus:bg-black/[0.045] data-[highlighted]:bg-black/[0.045]",
       )}
     >
-      <Icon size={16} />
+      <Icon
+        size={
+          16
+        }
+      />
 
       {label}
     </DropdownMenu.Item>
@@ -1153,7 +1839,7 @@ function MenuDivider({
         "my-1.5 border-t",
 
         theme === "dark"
-          ? "border-white/[0.08]"
+          ? "border-white/[0.07]"
           : "border-black/[0.08]",
       )}
     />

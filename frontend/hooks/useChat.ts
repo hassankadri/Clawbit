@@ -1,304 +1,1098 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
-import { chat } from "@/lib/api";
-import { DEFAULT_MODEL_ID } from "@/lib/models";
+import {
+  streamChat,
+} from "@/lib/api";
+
+import {
+  DEFAULT_MODEL_ID,
+} from "@/lib/models";
+
+
+/* ====================================================== */
+/* TYPES                                                  */
+/* ====================================================== */
 
 export interface Message {
   id: string;
-  role: "user" | "assistant";
+
+  role:
+    | "user"
+    | "assistant";
+
   content: string;
-  status?: "complete" | "streaming" | "error";
+
+  status?:
+    | "complete"
+    | "streaming"
+    | "error";
 }
+
 
 export interface ChatSnapshot {
-  messages: Message[];
-  threadId: string;
-  model: string;
+  messages:
+    Message[];
+
+  threadId:
+    string;
+
+  model:
+    string;
 }
 
+
+interface ActiveStream {
+  assistantMessageId:
+    string;
+
+  controller:
+    AbortController;
+}
+
+
+/* ====================================================== */
+/* HOOK                                                   */
+/* ====================================================== */
+
 export default function useChat() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [threadId, setThreadId] = useState<string>(() => crypto.randomUUID());
-  const [model, setModel] = useState(DEFAULT_MODEL_ID);
-  const messagesRef = useRef<Message[]>([]);
-  const streamRef = useRef<{
-    assistantMessageId: string;
-    controller: AbortController;
-    timeoutId: number | null;
-  } | null>(null);
+  const [
+    messages,
+    setMessages,
+  ] =
+    useState<Message[]>(
+      [],
+    );
 
-  useEffect(() => {
-    messagesRef.current = messages;
-  }, [messages]);
+  const [
+    loading,
+    setLoading,
+  ] =
+    useState(
+      false,
+    );
 
-  function updateMessage(
-    messageId: string,
-    updater: (message: Message) => Message,
+  const [
+    threadId,
+    setThreadId,
+  ] =
+    useState<string>(
+      () =>
+        crypto.randomUUID(),
+    );
+
+  const [
+    model,
+    setModel,
+  ] =
+    useState(
+      DEFAULT_MODEL_ID,
+    );
+
+
+  const messagesRef =
+    useRef<Message[]>(
+      [],
+    );
+
+
+  const streamRef =
+    useRef<
+      ActiveStream
+      | null
+    >(
+      null,
+    );
+
+
+  /* ==================================================== */
+  /* KEEP MESSAGE REF CURRENT                             */
+  /* ==================================================== */
+
+  useEffect(
+    () => {
+      messagesRef.current =
+        messages;
+    },
+
+    [
+      messages,
+    ],
+  );
+
+
+  /* ==================================================== */
+  /* MESSAGE STATE HELPERS                                */
+  /* ==================================================== */
+
+  function replaceMessages(
+    nextMessages:
+      Message[],
   ) {
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === messageId ? updater(message) : message,
-      ),
+    messagesRef.current =
+      nextMessages;
+
+    setMessages(
+      nextMessages,
     );
   }
 
-  function stopGeneration() {
-    const activeStream = streamRef.current;
-    const assistantMessage = activeStream
-      ? messagesRef.current.find(
-          (message) => message.id === activeStream.assistantMessageId,
-        )
-      : null;
 
-    if (activeStream) {
-      if (activeStream.timeoutId !== null) {
-        window.clearTimeout(activeStream.timeoutId);
-      }
+  function updateMessages(
+    updater: (
+      current:
+        Message[],
+    ) => Message[],
+  ) {
+    setMessages(
+      (
+        current,
+      ) => {
+        const next =
+          updater(
+            current,
+          );
 
-      activeStream.controller.abort();
-    }
+        messagesRef.current =
+          next;
 
-    if (assistantMessage) {
-      updateMessage(assistantMessage.id, (message) => ({
-        ...message,
-        content:
-          message.content.trim().length > 0
-            ? message.content
-            : "Generation stopped.",
-        status: "complete",
-      }));
-    }
-
-    streamRef.current = null;
-    setLoading(false);
+        return next;
+      },
+    );
   }
 
-  async function streamAssistantResponse(
-    assistantMessageId: string,
-    responseText: string,
+
+  function updateMessage(
+    messageId:
+      string,
+
+    updater: (
+      message:
+        Message,
+    ) => Message,
   ) {
-    const tokens = responseText.match(/\S+\s*/g) ?? [responseText];
-    let index = 0;
+    updateMessages(
+      (
+        current,
+      ) =>
+        current.map(
+          (
+            message,
+          ) =>
+            message.id ===
+            messageId
+              ? updater(
+                  message,
+                )
+              : message,
+        ),
+    );
+  }
 
-    const revealNext = () => {
-      const activeStream = streamRef.current;
 
+  /* ==================================================== */
+  /* STOP GENERATION                                      */
+  /* ==================================================== */
+
+  function stopGeneration() {
+    const activeStream =
+      streamRef.current;
+
+    if (
+      !activeStream
+    ) {
+      setLoading(
+        false,
+      );
+
+      return;
+    }
+
+
+    /*
+     * Abort the active fetch request.
+     */
+    activeStream.controller.abort();
+
+
+    /*
+     * Keep whatever text was already streamed.
+     */
+    updateMessage(
+      activeStream.assistantMessageId,
+
+      (
+        message,
+      ) => ({
+        ...message,
+
+        content:
+          message.content
+            .trim()
+            .length >
+          0
+            ? message.content
+            : "Generation stopped.",
+
+        status:
+          "complete",
+      }),
+    );
+
+
+    streamRef.current =
+      null;
+
+    setLoading(
+      false,
+    );
+  }
+
+
+  /* ==================================================== */
+  /* REQUEST ASSISTANT TURN                               */
+  /* ==================================================== */
+
+  async function requestAssistantTurn(
+    promptText:
+      string,
+
+    attachmentIds:
+      string[],
+
+    assistantMessageId:
+      string,
+  ) {
+    const controller =
+      new AbortController();
+
+
+    const activeStream: ActiveStream =
+      {
+        assistantMessageId,
+
+        controller,
+      };
+
+
+    streamRef.current =
+      activeStream;
+
+
+    let streamFinished =
+      false;
+
+    let streamFailed =
+      false;
+
+    let receivedContent =
+      false;
+
+
+    try {
+      await streamChat(
+        {
+          message:
+            promptText,
+
+          thread_id:
+            threadId ||
+            undefined,
+
+          model,
+
+          attachment_ids:
+            attachmentIds,
+        },
+
+        {
+          /* ============================================ */
+          /* STREAM START                                 */
+          /* ============================================ */
+
+          onStart: (
+            event,
+          ) => {
+            if (
+              controller
+                .signal
+                .aborted
+            ) {
+              return;
+            }
+
+
+            if (
+              event.thread_id &&
+              event.thread_id !==
+                threadId
+            ) {
+              setThreadId(
+                event.thread_id,
+              );
+            }
+          },
+
+
+          /* ============================================ */
+          /* REAL TOKEN STREAM                            */
+          /* ============================================ */
+
+          onToken: (
+            text,
+          ) => {
+            if (
+              controller
+                .signal
+                .aborted
+            ) {
+              return;
+            }
+
+
+            if (
+              !text
+            ) {
+              return;
+            }
+
+
+            receivedContent =
+              true;
+
+
+            updateMessage(
+              assistantMessageId,
+
+              (
+                message,
+              ) => ({
+                ...message,
+
+                content:
+                  message.content +
+                  text,
+
+                status:
+                  "streaming",
+              }),
+            );
+          },
+
+
+          /* ============================================ */
+          /* STREAM COMPLETE                              */
+          /* ============================================ */
+
+          onDone: (
+            event,
+          ) => {
+            if (
+              controller
+                .signal
+                .aborted
+            ) {
+              return;
+            }
+
+
+            streamFinished =
+              true;
+
+
+            if (
+              event.thread_id &&
+              event.thread_id !==
+                threadId
+            ) {
+              setThreadId(
+                event.thread_id,
+              );
+            }
+
+
+            updateMessage(
+              assistantMessageId,
+
+              (
+                message,
+              ) => ({
+                ...message,
+
+                content:
+                  message.content
+                    .trim()
+                    .length >
+                  0
+                    ? message.content
+                    : "I couldn't generate a response. Please try again.",
+
+                status:
+                  message.content
+                    .trim()
+                    .length >
+                  0
+                    ? "complete"
+                    : "error",
+              }),
+            );
+
+
+            if (
+              streamRef
+                .current
+                ?.assistantMessageId ===
+              assistantMessageId
+            ) {
+              streamRef.current =
+                null;
+            }
+
+
+            setLoading(
+              false,
+            );
+          },
+
+
+          /* ============================================ */
+          /* BACKEND SSE ERROR                            */
+          /* ============================================ */
+
+          onError: (
+            event,
+          ) => {
+            if (
+              controller
+                .signal
+                .aborted
+            ) {
+              return;
+            }
+
+
+            streamFailed =
+              true;
+
+
+            const errorMessage =
+              event.message
+                ?.trim() ||
+              "I couldn't generate a response right now. Please try again.";
+
+
+            updateMessage(
+              assistantMessageId,
+
+              (
+                message,
+              ) => ({
+                ...message,
+
+                content:
+                  errorMessage,
+
+                status:
+                  "error",
+              }),
+            );
+
+
+            if (
+              streamRef
+                .current
+                ?.assistantMessageId ===
+              assistantMessageId
+            ) {
+              streamRef.current =
+                null;
+            }
+
+
+            setLoading(
+              false,
+            );
+          },
+        },
+
+        controller.signal,
+      );
+
+
+      /*
+       * If the connection ended without receiving either
+       * "done" or "error", treat it as an interrupted stream.
+       */
       if (
-        !activeStream ||
-        activeStream.assistantMessageId !== assistantMessageId
+        !controller
+          .signal
+          .aborted &&
+        !streamFinished &&
+        !streamFailed
+      ) {
+        if (
+          receivedContent
+        ) {
+          updateMessage(
+            assistantMessageId,
+
+            (
+              message,
+            ) => ({
+              ...message,
+
+              status:
+                "complete",
+            }),
+          );
+
+          streamFinished =
+            true;
+        } else {
+          updateMessage(
+            assistantMessageId,
+
+            (
+              message,
+            ) => ({
+              ...message,
+
+              content:
+                "The response stream ended unexpectedly. Please try again.",
+
+              status:
+                "error",
+            }),
+          );
+
+          streamFailed =
+            true;
+        }
+      }
+    } catch (
+      error
+    ) {
+      /*
+       * Abort is expected when the user presses Stop.
+       */
+      if (
+        controller
+          .signal
+          .aborted
       ) {
         return;
       }
 
-      const nextContent = tokens.slice(0, index + 1).join("");
 
-      updateMessage(assistantMessageId, (message) => ({
-        ...message,
-        content: nextContent,
-        status: "streaming",
-      }));
+      streamFailed =
+        true;
 
-      index += 1;
 
-      if (index >= tokens.length) {
-        updateMessage(assistantMessageId, (message) => ({
+      const errorMessage =
+        error instanceof
+        Error
+          ? error.message
+          : "I couldn't generate a response right now. Please try again.";
+
+
+      updateMessage(
+        assistantMessageId,
+
+        (
+          message,
+        ) => ({
           ...message,
-          content: responseText,
-          status: "complete",
-        }));
 
-        streamRef.current = null;
-        setLoading(false);
-        return;
-      }
+          content:
+            errorMessage,
 
-      const delay = Math.max(8, Math.min(26, Math.floor(1200 / Math.max(tokens.length, 1))));
-      activeStream.timeoutId = window.setTimeout(revealNext, delay);
-    };
-
-    revealNext();
-  }
-
-  async function requestAssistantTurn(
-    promptText: string,
-    attachmentIds: string[],
-    assistantMessageId: string,
-  ) {
-    const controller = new AbortController();
-    streamRef.current = {
-      assistantMessageId,
-      controller,
-      timeoutId: null,
-    };
-
-    try {
-      const response = await chat(
-        {
-          message: promptText,
-          thread_id: threadId || undefined,
-          model,
-          attachment_ids: attachmentIds,
-        },
-        controller.signal,
+          status:
+            "error",
+        }),
       );
 
-      if (controller.signal.aborted) {
-        return;
+
+      console.error(
+        error,
+      );
+    } finally {
+      if (
+        streamRef
+          .current
+          ?.assistantMessageId ===
+        assistantMessageId
+      ) {
+        streamRef.current =
+          null;
       }
 
-      if (threadId !== response.thread_id) {
-        setThreadId(response.thread_id);
+
+      if (
+        !controller
+          .signal
+          .aborted
+      ) {
+        setLoading(
+          false,
+        );
       }
-
-      await streamAssistantResponse(assistantMessageId, response.response);
-    } catch (error) {
-      if (controller.signal.aborted) {
-        return;
-      }
-
-      updateMessage(assistantMessageId, (message) => ({
-        ...message,
-        content:
-          "I couldn’t generate a response right now. Please try again.",
-        status: "error",
-      }));
-
-      streamRef.current = null;
-      setLoading(false);
-      console.error(error);
     }
   }
 
-  async function sendMessage(text: string, attachmentIds: string[] = []) {
-    if (!text.trim() && attachmentIds.length === 0) return;
-    if (loading || streamRef.current) return;
 
-    const userMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: text,
-      status: "complete",
-    };
-    const assistantMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      status: "streaming",
-    };
+  /* ==================================================== */
+  /* SEND MESSAGE                                         */
+  /* ==================================================== */
 
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
-    setLoading(true);
-    await requestAssistantTurn(text, attachmentIds, assistantMessage.id);
+  async function sendMessage(
+    text:
+      string,
+
+    attachmentIds:
+      string[] = [],
+  ) {
+    const normalizedText =
+      text.trim();
+
+
+    if (
+      !normalizedText &&
+      attachmentIds.length ===
+        0
+    ) {
+      return;
+    }
+
+
+    if (
+      loading ||
+      streamRef.current
+    ) {
+      return;
+    }
+
+
+    const userMessage: Message =
+      {
+        id:
+          crypto.randomUUID(),
+
+        role:
+          "user",
+
+        content:
+          text,
+
+        status:
+          "complete",
+      };
+
+
+    const assistantMessage: Message =
+      {
+        id:
+          crypto.randomUUID(),
+
+        role:
+          "assistant",
+
+        content:
+          "",
+
+        status:
+          "streaming",
+      };
+
+
+    updateMessages(
+      (
+        current,
+      ) => [
+        ...current,
+
+        userMessage,
+
+        assistantMessage,
+      ],
+    );
+
+
+    setLoading(
+      true,
+    );
+
+
+    await requestAssistantTurn(
+      text,
+
+      attachmentIds,
+
+      assistantMessage.id,
+    );
   }
+
+
+  /* ==================================================== */
+  /* CLEAR CHAT                                           */
+  /* ==================================================== */
 
   function clearChat() {
     stopGeneration();
-    setMessages([]);
-    setThreadId(crypto.randomUUID());
+
+
+    replaceMessages(
+      [],
+    );
+
+
+    setThreadId(
+      crypto.randomUUID(),
+    );
   }
 
-  function createSnapshot(): ChatSnapshot {
+
+  /* ==================================================== */
+  /* SNAPSHOT                                             */
+  /* ==================================================== */
+
+  function createSnapshot():
+    ChatSnapshot {
     return {
-      messages,
+      messages:
+        messagesRef.current,
+
       threadId,
+
       model,
     };
   }
 
+
   function restoreSnapshot(
-    snapshot: ChatSnapshot
+    snapshot:
+      ChatSnapshot,
   ) {
     stopGeneration();
-    setMessages(snapshot.messages);
-    setThreadId(snapshot.threadId);
-    setModel(snapshot.model);
+
+
+    replaceMessages(
+      snapshot.messages,
+    );
+
+
+    setThreadId(
+      snapshot.threadId,
+    );
+
+
+    setModel(
+      snapshot.model,
+    );
   }
 
-  function deleteMessage(messageId: string) {
-    if (streamRef.current?.assistantMessageId === messageId) {
+
+  /* ==================================================== */
+  /* DELETE MESSAGE                                       */
+  /* ==================================================== */
+
+  function deleteMessage(
+    messageId:
+      string,
+  ) {
+    if (
+      streamRef
+        .current
+        ?.assistantMessageId ===
+      messageId
+    ) {
       stopGeneration();
     }
 
-    setMessages((current) =>
-      current.filter((message) => message.id !== messageId),
+
+    updateMessages(
+      (
+        current,
+      ) =>
+        current.filter(
+          (
+            message,
+          ) =>
+            message.id !==
+            messageId,
+        ),
     );
   }
 
-  async function retryAssistantMessage(messageId: string) {
-    const currentMessages = messagesRef.current;
-    const messageIndex = currentMessages.findIndex((item) => item.id === messageId);
 
-    if (messageIndex <= 0) return;
+  /* ==================================================== */
+  /* RETRY ASSISTANT                                      */
+  /* ==================================================== */
 
-    const promptMessage = currentMessages[messageIndex - 1];
-    if (promptMessage.role !== "user") return;
+  async function retryAssistantMessage(
+    messageId:
+      string,
+  ) {
+    if (
+      loading ||
+      streamRef.current
+    ) {
+      return;
+    }
+
+
+    const currentMessages =
+      messagesRef.current;
+
+
+    const messageIndex =
+      currentMessages.findIndex(
+        (
+          item,
+        ) =>
+          item.id ===
+          messageId,
+      );
+
+
+    if (
+      messageIndex <=
+      0
+    ) {
+      return;
+    }
+
+
+    const promptMessage =
+      currentMessages[
+        messageIndex -
+        1
+      ];
+
+
+    if (
+      promptMessage.role !==
+      "user"
+    ) {
+      return;
+    }
+
 
     stopGeneration();
 
-    setMessages(currentMessages.slice(0, messageIndex));
-    const assistantMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      status: "streaming",
-    };
 
-    setMessages((current) => [...current, assistantMessage]);
-    setLoading(true);
-    await requestAssistantTurn(promptMessage.content, [], assistantMessage.id);
-  }
+    const assistantMessage: Message =
+      {
+        id:
+          crypto.randomUUID(),
 
-  async function editMessage(messageId: string, content: string) {
-    const currentMessages = messagesRef.current;
-    const messageIndex = currentMessages.findIndex((item) => item.id === messageId);
+        role:
+          "assistant",
 
-    if (messageIndex < 0) return;
+        content:
+          "",
 
-    const targetMessage = currentMessages[messageIndex];
-    if (targetMessage.role !== "user") return;
+        status:
+          "streaming",
+      };
 
-    stopGeneration();
 
-    const trimmedMessages = currentMessages.slice(0, messageIndex + 1).map((message) =>
-      message.id === messageId
-        ? {
-            ...message,
-            content,
-            status: "complete" as const,
-          }
-        : message,
+    replaceMessages(
+      [
+        ...currentMessages.slice(
+          0,
+
+          messageIndex,
+        ),
+
+        assistantMessage,
+      ],
     );
 
-    setMessages(trimmedMessages);
 
-    const assistantMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-      status: "streaming",
-    };
+    setLoading(
+      true,
+    );
 
-    setMessages((current) => [...current, assistantMessage]);
-    setLoading(true);
-    await requestAssistantTurn(content, [], assistantMessage.id);
+
+    await requestAssistantTurn(
+      promptMessage.content,
+
+      [],
+
+      assistantMessage.id,
+    );
   }
+
+
+  /* ==================================================== */
+  /* EDIT USER MESSAGE                                    */
+  /* ==================================================== */
+
+  async function editMessage(
+    messageId:
+      string,
+
+    content:
+      string,
+  ) {
+    if (
+      loading ||
+      streamRef.current
+    ) {
+      return;
+    }
+
+
+    const currentMessages =
+      messagesRef.current;
+
+
+    const messageIndex =
+      currentMessages.findIndex(
+        (
+          item,
+        ) =>
+          item.id ===
+          messageId,
+      );
+
+
+    if (
+      messageIndex <
+      0
+    ) {
+      return;
+    }
+
+
+    const targetMessage =
+      currentMessages[
+        messageIndex
+      ];
+
+
+    if (
+      targetMessage.role !==
+      "user"
+    ) {
+      return;
+    }
+
+
+    const normalizedContent =
+      content.trim();
+
+
+    if (
+      !normalizedContent
+    ) {
+      return;
+    }
+
+
+    stopGeneration();
+
+
+    const trimmedMessages =
+      currentMessages
+        .slice(
+          0,
+
+          messageIndex +
+            1,
+        )
+        .map(
+          (
+            message,
+          ) =>
+            message.id ===
+            messageId
+              ? {
+                  ...message,
+
+                  content,
+
+                  status:
+                    "complete" as const,
+                }
+              : message,
+        );
+
+
+    const assistantMessage: Message =
+      {
+        id:
+          crypto.randomUUID(),
+
+        role:
+          "assistant",
+
+        content:
+          "",
+
+        status:
+          "streaming",
+      };
+
+
+    replaceMessages(
+      [
+        ...trimmedMessages,
+
+        assistantMessage,
+      ],
+    );
+
+
+    setLoading(
+      true,
+    );
+
+
+    await requestAssistantTurn(
+      content,
+
+      [],
+
+      assistantMessage.id,
+    );
+  }
+
+
+  /* ==================================================== */
+  /* PUBLIC API                                           */
+  /* ==================================================== */
 
   return {
     messages,
+
     loading,
+
     model,
+
     setModel,
+
     threadId,
+
     sendMessage,
+
     stopGeneration,
+
     deleteMessage,
+
     retryAssistantMessage,
+
     editMessage,
+
     clearChat,
+
     createSnapshot,
+
     restoreSnapshot,
   };
 }

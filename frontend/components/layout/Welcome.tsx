@@ -1,197 +1,448 @@
 "use client";
 
-import { motion } from "framer-motion";
 import {
-  BrainCircuit,
-  Code2,
-  FileText,
-  Globe,
+  FileSearch,
+  GitBranch,
+  Lightbulb,
+  ListTodo,
+  MessageSquare,
+  Search,
   Sparkles,
+  WandSparkles,
+  X,
 } from "lucide-react";
 
-import ClawbitMark from "@/components/brand/ClawbitMark";
+import {
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-const suggestions = [
-  {
-    title: "Ask anything",
-    description: "Reason through a problem or explore an idea",
-    icon: Sparkles,
-    prompt:
-      "Help me think through a difficult problem step by step.",
-  },
-  {
-    title: "Analyze files",
-    description: "Upload documents and ask grounded questions",
-    icon: FileText,
-    prompt:
-      "I want to analyze a document and extract the most important insights.",
-  },
-  {
-    title: "Research the web",
-    description: "Use live sources for deeper research",
-    icon: Globe,
-    prompt:
-      "Research a topic for me and summarize the most important findings.",
-  },
-  {
-    title: "Build with AI",
-    description: "Design, debug, and improve software",
-    icon: Code2,
-    prompt:
-      "Help me design and build a production-ready AI feature.",
-  },
-];
-
 interface WelcomeProps {
   theme: Theme;
-  onSuggestionSelect: (prompt: string) => void;
+
+  onSuggestionSelect: (
+    prompt: string,
+  ) => void;
+
+  conversationKey?: string;
+
+  composer?: ReactNode;
 }
+
+interface Suggestion {
+  id: string;
+
+  icon: ComponentType<{
+    size?: number;
+    className?: string;
+  }>;
+
+  label: string;
+
+  prompt: string;
+}
+
+/* ====================================================== */
+/* HEADINGS                                               */
+/* ====================================================== */
+
+const headings = [
+  "Where should we begin?",
+  "Ready when you are.",
+  "What can I help with?",
+  "What are we working on?",
+  "What should we tackle?",
+  "What’s on your mind?",
+  "How can I help today?",
+  "What do you want to build?",
+  "What should we explore?",
+  "Let’s get something done.",
+];
+
+/* ====================================================== */
+/* SUGGESTIONS                                            */
+/* ====================================================== */
+
+const suggestionGroups: Suggestion[][] = [
+  [
+    {
+      id: "research",
+      icon: Search,
+      label:
+        "Research a topic using current web sources",
+      prompt:
+        "Research a topic for me using current web sources. Compare the important information and give me a clear summary with sources.",
+    },
+
+    {
+      id: "document",
+      icon: FileSearch,
+      label:
+        "Analyze a document or PDF I upload",
+      prompt:
+        "Help me analyze a document. I will upload the file and I want the important information explained clearly.",
+    },
+
+    {
+      id: "plan",
+      icon: ListTodo,
+      label:
+        "Turn an idea into a clear step-by-step plan",
+      prompt:
+        "Help me turn my idea into a practical step-by-step plan with priorities and the best next action.",
+    },
+  ],
+
+  [
+    {
+      id: "code",
+      icon: WandSparkles,
+      label:
+        "Help me build or debug a software project",
+      prompt:
+        "Help me build or debug a software project. Work through it step by step and explain what needs to be changed.",
+    },
+
+    {
+      id: "github",
+      icon: GitBranch,
+      label:
+        "Work with my GitHub repositories and code",
+      prompt:
+        "Help me work with my GitHub repositories. Review the relevant code or recent activity and tell me what I should do next.",
+    },
+
+    {
+      id: "rewrite",
+      icon: MessageSquare,
+      label:
+        "Write, rewrite, or improve something",
+      prompt:
+        "Help me write or improve something. Keep it natural, clear, and well structured.",
+    },
+  ],
+
+  [
+    {
+      id: "brainstorm",
+      icon: Lightbulb,
+      label:
+        "Brainstorm ideas and find the strongest options",
+      prompt:
+        "Brainstorm several strong ideas for me, explain the useful ones, and help me narrow them down.",
+    },
+
+    {
+      id: "project",
+      icon: Sparkles,
+      label:
+        "Review a project and suggest the best next steps",
+      prompt:
+        "Review my project context and suggest the most useful next steps, priorities, and improvements.",
+    },
+
+    {
+      id: "tools",
+      icon: GitBranch,
+      label:
+        "Use connected tools like Drive, Notion, GitHub, and Slack",
+      prompt:
+        "Help me use my connected tools to find or work with the information I need.",
+    },
+  ],
+];
+
+/* ====================================================== */
+/* HASH                                                   */
+/* ====================================================== */
+
+function hashString(
+  value: string,
+) {
+  let hash = 0;
+
+  for (
+    let index = 0;
+    index < value.length;
+    index += 1
+  ) {
+    hash =
+      (
+        hash * 31 +
+        value.charCodeAt(
+          index,
+        )
+      ) >>>
+      0;
+  }
+
+  return hash;
+}
+
+/* ====================================================== */
+/* WELCOME                                                */
+/* ====================================================== */
 
 export default function Welcome({
   theme,
   onSuggestionSelect,
+  conversationKey = "initial",
+  composer,
 }: WelcomeProps) {
+  const isDark =
+    theme === "dark";
+
+  /*
+   * Keep dismissed suggestions separated by chat.
+   *
+   * New conversationKey = fresh suggestions automatically.
+   * No effect/state synchronization required.
+   */
+  const [
+    dismissedByConversation,
+    setDismissedByConversation,
+  ] = useState<
+    Record<
+      string,
+      string[]
+    >
+  >({});
+
+  const dismissedSuggestions =
+    dismissedByConversation[
+      conversationKey
+    ] ?? [];
+
+  const heading =
+    useMemo(() => {
+      const index =
+        hashString(
+          conversationKey,
+        ) %
+        headings.length;
+
+      return headings[
+        index
+      ];
+    }, [
+      conversationKey,
+    ]);
+
+  const suggestions =
+    useMemo(() => {
+      const index =
+        (
+          hashString(
+            conversationKey,
+          ) +
+          3
+        ) %
+        suggestionGroups.length;
+
+      return suggestionGroups[
+        index
+      ];
+    }, [
+      conversationKey,
+    ]);
+
+  const visibleSuggestions =
+    suggestions.filter(
+      (
+        suggestion,
+      ) =>
+        !dismissedSuggestions.includes(
+          suggestion.id,
+        ),
+    );
+
+  function dismissSuggestion(
+    id: string,
+  ) {
+    setDismissedByConversation(
+      (
+        current,
+      ) => {
+        const currentDismissed =
+          current[
+            conversationKey
+          ] ?? [];
+
+        if (
+          currentDismissed.includes(
+            id,
+          )
+        ) {
+          return current;
+        }
+
+        return {
+          ...current,
+
+          [conversationKey]:
+            [
+              ...currentDismissed,
+              id,
+            ],
+        };
+      },
+    );
+  }
+
   return (
-    <div className="clawbit-glow relative flex h-full w-full overflow-y-auto">
-      <div className="mx-auto flex min-h-full w-full max-w-[980px] flex-col justify-center px-5 pb-24 pt-14 sm:px-8 lg:px-10">
-        <motion.div
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.42, ease: "easeOut" }}
-          className="mx-auto flex max-w-3xl flex-col items-center text-center"
-        >
-          <div
-            className={cn(
-              "relative mb-7 flex h-16 w-16 items-center justify-center rounded-[20px] border",
-              theme === "dark"
-                ? "border-white/[0.07] bg-white/[0.035]"
-                : "border-slate-200 bg-white shadow-[0_12px_40px_rgba(15,23,42,0.08)]",
-            )}
-          >
-            <div className="absolute inset-0 rounded-[20px] bg-[radial-gradient(circle_at_35%_25%,rgba(139,124,255,0.18),transparent_55%)]" />
-            <ClawbitMark
-              className={cn(
-                "relative h-8 w-8",
-                theme === "dark"
-                  ? "text-white"
-                  : "text-slate-950",
-              )}
-            />
-          </div>
+    <section className="relative flex min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col justify-center px-5 pb-[15vh] pt-16 sm:px-8">
+        {/* ============================================= */}
+        {/* HEADING                                       */}
+        {/* ============================================= */}
 
-          <div
-            className={cn(
-              "mb-4 inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.16em]",
-              theme === "dark"
-                ? "border-white/[0.07] bg-white/[0.025] text-zinc-400"
-                : "border-slate-200 bg-white/80 text-slate-500",
-            )}
-          >
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-            AI workspace
-          </div>
-
+        <div className="mb-7 text-center">
           <h1
             className={cn(
-              "max-w-[760px] text-balance text-[36px] font-semibold leading-[1.08] tracking-[-0.035em] sm:text-[46px] lg:text-[54px]",
-              theme === "dark"
-                ? "text-white"
-                : "text-slate-950",
+              "text-[27px] font-medium tracking-[-0.035em] sm:text-[30px]",
+
+              isDark
+                ? "text-zinc-100"
+                : "text-zinc-900",
             )}
           >
-            What are we working on?
+            {heading}
           </h1>
+        </div>
 
-          <p
-            className={cn(
-              "mt-5 max-w-[610px] text-pretty text-[15px] leading-7 sm:text-[16px]",
-              theme === "dark"
-                ? "text-zinc-400"
-                : "text-slate-600",
-            )}
-          >
-            Chat, research the web, work with documents, and build with
-            multiple AI models from one focused workspace.
-          </p>
-        </motion.div>
+        {/* ============================================= */}
+        {/* REAL COMPOSER                                 */}
+        {/* ============================================= */}
 
-        <div className="mt-12 grid w-full gap-3 sm:grid-cols-2">
-          {suggestions.map((item, index) => {
-            const Icon = item.icon;
+        {composer ? (
+          <div className="w-full">
+            {composer}
+          </div>
+        ) : null}
 
-            return (
-              <motion.button
-                key={item.title}
-                type="button"
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{
-                  delay: 0.06 + index * 0.055,
-                  duration: 0.3,
-                }}
-                onClick={() =>
-                  onSuggestionSelect(item.prompt)
-                }
-                className={cn(
-                  "group flex min-h-[92px] items-center gap-4 rounded-[18px] border p-4 text-left",
-                  theme === "dark"
-                    ? "border-white/[0.065] bg-white/[0.025] hover:border-white/[0.11] hover:bg-white/[0.045]"
-                    : "border-slate-200 bg-white/75 shadow-[0_8px_30px_rgba(15,23,42,0.035)] hover:border-slate-300 hover:bg-white",
-                )}
-              >
-                <div
-                  className={cn(
-                    "flex h-11 w-11 shrink-0 items-center justify-center rounded-[14px] border transition-transform duration-200 group-hover:scale-[1.04]",
-                    theme === "dark"
-                      ? "border-white/[0.06] bg-white/[0.035] text-violet-300"
-                      : "border-violet-100 bg-violet-50 text-violet-600",
-                  )}
-                >
-                  <Icon size={19} />
-                </div>
+        {/* ============================================= */}
+        {/* SUGGESTIONS                                   */}
+        {/* ============================================= */}
 
-                <div className="min-w-0">
-                  <p className="text-[14px] font-semibold tracking-[-0.01em]">
-                    {item.title}
-                  </p>
-                  <p
-                    className={cn(
-                      "mt-1 text-[13px] leading-5",
-                      theme === "dark"
-                        ? "text-zinc-500"
-                        : "text-slate-500",
-                    )}
+        {visibleSuggestions.length >
+        0 ? (
+          <div className="mx-auto mt-4 w-full max-w-[760px]">
+            {visibleSuggestions.map(
+              (
+                suggestion,
+                index,
+              ) => {
+                const Icon =
+                  suggestion.icon;
+
+                return (
+                  <div
+                    key={
+                      suggestion.id
+                    }
+                    className="group relative"
                   >
-                    {item.description}
-                  </p>
-                </div>
-              </motion.button>
-            );
-          })}
-        </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onSuggestionSelect(
+                          suggestion.prompt,
+                        )
+                      }
+                      className={cn(
+                        "flex w-full items-center gap-3 rounded-[12px] py-3 pl-3 pr-11 text-left",
 
-        <div
-          className={cn(
-            "mx-auto mt-7 flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-[11px]",
-            theme === "dark"
-              ? "text-zinc-600"
-              : "text-slate-400",
-          )}
-        >
-          <span className="inline-flex items-center gap-1.5">
-            <BrainCircuit size={13} />
-            Memory
-          </span>
-          <span>•</span>
-          <span>Document RAG</span>
-          <span>•</span>
-          <span>Research mode</span>
-          <span>•</span>
-          <span>Multiple models</span>
-        </div>
+                        "transition-[background-color,transform] duration-150 ease-out",
+
+                        "hover:translate-x-[2px]",
+
+                        isDark
+                          ? "text-zinc-300 hover:bg-white/[0.055] hover:text-white"
+                          : "text-zinc-700 hover:bg-black/[0.045] hover:text-zinc-950",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "flex h-7 w-7 shrink-0 items-center justify-center",
+
+                          index ===
+                          0
+                            ? isDark
+                              ? "text-blue-400"
+                              : "text-blue-600"
+                            : index ===
+                                1
+                              ? isDark
+                                ? "text-violet-400"
+                                : "text-violet-600"
+                              : isDark
+                                ? "text-emerald-400"
+                                : "text-emerald-600",
+                        )}
+                      >
+                        <Icon
+                          size={
+                            17
+                          }
+                        />
+                      </span>
+
+                      <span className="min-w-0 flex-1 text-[14px] leading-5">
+                        {
+                          suggestion.label
+                        }
+                      </span>
+                    </button>
+
+                    {/* ================================= */}
+                    {/* DISMISS                           */}
+                    {/* ================================= */}
+
+                    <button
+                      type="button"
+                      aria-label="Dismiss suggestion"
+                      title="Dismiss"
+                      onClick={(
+                        event,
+                      ) => {
+                        event.stopPropagation();
+
+                        dismissSuggestion(
+                          suggestion.id,
+                        );
+                      }}
+                      className={cn(
+                        "absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full",
+
+                        "scale-90 opacity-0 transition-all duration-150",
+
+                        "group-hover:scale-100 group-hover:opacity-100",
+
+                        "group-focus-within:scale-100 group-focus-within:opacity-100",
+
+                        isDark
+                          ? "text-zinc-500 hover:bg-white/[0.09] hover:text-zinc-200"
+                          : "text-zinc-400 hover:bg-black/[0.07] hover:text-zinc-900",
+                      )}
+                    >
+                      <X
+                        size={
+                          14
+                        }
+                      />
+                    </button>
+                  </div>
+                );
+              },
+            )}
+          </div>
+        ) : null}
       </div>
-    </div>
+    </section>
   );
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import * as Popover from "@radix-ui/react-popover";
-
 import { motion } from "framer-motion";
 
 import {
@@ -37,7 +36,13 @@ import { MODELS } from "@/lib/models";
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
+/* ====================================================== */
+/* TYPES                                                  */
+/* ====================================================== */
+
 interface ComposerProps {
+  assistantName: string;
+
   loading: boolean;
   model: string;
   threadId: string;
@@ -48,7 +53,9 @@ interface ComposerProps {
     text: string;
   } | null;
 
-  onModelChange: (model: string) => void;
+  onModelChange: (
+    model: string,
+  ) => void;
 
   onSend: (
     message: string,
@@ -80,13 +87,19 @@ type AttachmentKind =
 interface AttachmentItem {
   id: string;
   serverId?: string;
+
   kind: AttachmentKind;
+
   name: string;
   detail: string;
+
   size: number;
   mimeType: string;
+
   status: AttachmentStatus;
+
   progress: number;
+
   error?: string;
   preview?: string;
 }
@@ -108,11 +121,15 @@ interface SpeechRecognitionEventLike {
 
 interface SpeechRecognitionLike {
   lang: string;
+
   interimResults: boolean;
   continuous: boolean;
 
   onresult:
-    | ((event: SpeechRecognitionEventLike) => void)
+    | ((
+        event:
+          SpeechRecognitionEventLike,
+      ) => void)
     | null;
 
   onend:
@@ -120,7 +137,10 @@ interface SpeechRecognitionLike {
     | null;
 
   onerror:
-    | ((event: SpeechRecognitionErrorEventLike) => void)
+    | ((
+        event:
+          SpeechRecognitionErrorEventLike,
+      ) => void)
     | null;
 
   onstart:
@@ -131,6 +151,10 @@ interface SpeechRecognitionLike {
   stop: () => void;
   abort: () => void;
 }
+
+/* ====================================================== */
+/* FILE SUPPORT                                           */
+/* ====================================================== */
 
 const acceptedExtensions = [
   ".pdf",
@@ -144,80 +168,145 @@ const acceptedExtensions = [
   ".webp",
 ];
 
-const acceptedMimeTypes = new Set([
-  "application/pdf",
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "image/png",
-  "image/jpeg",
-  "image/webp",
-]);
+const acceptedMimeTypes =
+  new Set([
+    "application/pdf",
 
-const availableModels = MODELS.filter(
-  (item) => item.available,
-);
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 
-const mimeExtensionMap: Record<string, string> = {
-  "application/pdf": "pdf",
+    "text/plain",
+    "text/markdown",
+    "text/csv",
 
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
-    "docx",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+  ]);
 
-  "text/plain": "txt",
-  "text/markdown": "md",
-  "text/csv": "csv",
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-};
+const mimeExtensionMap:
+  Record<string, string> = {
+    "application/pdf":
+      "pdf",
+
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+      "docx",
+
+    "text/plain":
+      "txt",
+
+    "text/markdown":
+      "md",
+
+    "text/csv":
+      "csv",
+
+    "image/png":
+      "png",
+
+    "image/jpeg":
+      "jpg",
+
+    "image/webp":
+      "webp",
+  };
+
+const availableModels =
+  MODELS.filter(
+    (
+      item,
+    ) =>
+      item.available,
+  );
+
+/* ====================================================== */
+/* COMPOSER                                               */
+/* ====================================================== */
 
 export default function Composer({
+  assistantName,
+
   loading,
   model,
   threadId,
   theme,
+
   prefill,
+
   onModelChange,
   onSend,
   onAttachmentsCommitted,
 }: ComposerProps) {
-  const [message, setMessage] = useState("");
+  const [
+    message,
+    setMessage,
+  ] =
+    useState("");
 
-  const [modelOpen, setModelOpen] =
+  const [
+    modelOpen,
+    setModelOpen,
+  ] =
     useState(false);
 
-  const [chatMode, setChatMode] =
+  const [
+    chatMode,
+    setChatMode,
+  ] =
     useState<ChatMode>(
-      () => getActiveChatMode(),
+      () =>
+        getActiveChatMode(),
     );
 
-  const [attachments, setAttachments] =
-    useState<AttachmentItem[]>([]);
+  const [
+    attachments,
+    setAttachments,
+  ] =
+    useState<
+      AttachmentItem[]
+    >([]);
 
-  const [isRecording, setIsRecording] =
+  const [
+    isRecording,
+    setIsRecording,
+  ] =
     useState(false);
 
-  const [isDragging, setIsDragging] =
+  const [
+    isDragging,
+    setIsDragging,
+  ] =
     useState(false);
 
-  const [voiceNotice, setVoiceNotice] =
-    useState<string | null>(null);
+  const [
+    voiceNotice,
+    setVoiceNotice,
+  ] =
+    useState<
+      string | null
+    >(null);
 
   const textareaRef =
-    useRef<HTMLTextAreaElement | null>(null);
+    useRef<HTMLTextAreaElement | null>(
+      null,
+    );
 
   const fileInputRef =
-    useRef<HTMLInputElement | null>(null);
+    useRef<HTMLInputElement | null>(
+      null,
+    );
 
   const recognitionRef =
-    useRef<SpeechRecognitionLike | null>(null);
+    useRef<SpeechRecognitionLike | null>(
+      null,
+    );
 
-  const dragDepthRef = useRef(0);
+  const dragDepthRef =
+    useRef(0);
 
   const attachmentsRef =
-    useRef<AttachmentItem[]>([]);
+    useRef<
+      AttachmentItem[]
+    >([]);
 
   const voiceBaseMessageRef =
     useRef("");
@@ -225,47 +314,122 @@ export default function Composer({
   const voiceTranscriptRef =
     useRef("");
 
-  const uploadAbortersRef = useRef(
-    new Map<
-      string,
-      {
-        abort: () => void;
-        promise: Promise<unknown>;
-      }
-    >(),
-  );
+  const uploadAbortersRef =
+    useRef(
+      new Map<
+        string,
+        {
+          abort: () => void;
+          promise:
+            Promise<unknown>;
+        }
+      >(),
+    );
+
+  /* ==================================================== */
+  /* INITIAL FOCUS                                        */
+  /* ==================================================== */
 
   useEffect(() => {
     textareaRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    if (!prefill) return;
+  /* ==================================================== */
+  /* PREFILL                                              */
+  /* ==================================================== */
 
-    queueMicrotask(() => {
-      setMessage(prefill.text);
-      setVoiceNotice(null);
-    });
+  useEffect(() => {
+    if (!prefill) {
+      return;
+    }
+
+    queueMicrotask(
+      () => {
+        setMessage(
+          prefill.text,
+        );
+
+        setVoiceNotice(
+          null,
+        );
+      },
+    );
 
     const frameId =
-      window.requestAnimationFrame(() => {
-        const textarea =
-          textareaRef.current;
+      window.requestAnimationFrame(
+        () => {
+          const textarea =
+            textareaRef.current;
 
-        if (!textarea) return;
+          if (
+            !textarea
+          ) {
+            return;
+          }
 
-        textarea.focus();
+          textarea.focus();
 
-        textarea.setSelectionRange(
-          prefill.text.length,
-          prefill.text.length,
-        );
-      });
+          textarea.setSelectionRange(
+            prefill.text.length,
+            prefill.text.length,
+          );
+        },
+      );
 
     return () => {
-      window.cancelAnimationFrame(frameId);
+      window.cancelAnimationFrame(
+        frameId,
+      );
     };
-  }, [prefill]);
+  }, [
+    prefill,
+  ]);
+
+  /* ==================================================== */
+  /* CHAT MODE SYNC                                       */
+  /* ==================================================== */
+
+  useEffect(() => {
+    function handleModeUpdate(
+      event: Event,
+    ) {
+      const detail =
+        (
+          event as CustomEvent<{
+            mode?: ChatMode;
+          }>
+        ).detail;
+
+      if (
+        detail?.mode ===
+          "normal" ||
+        detail?.mode ===
+          "research"
+      ) {
+        setChatMode(
+          detail.mode,
+        );
+      }
+    }
+
+    window.addEventListener(
+      "clawbit:chat-mode-updated",
+
+      handleModeUpdate,
+    );
+
+    return () => {
+      window.removeEventListener(
+        "clawbit:chat-mode-updated",
+
+        handleModeUpdate,
+      );
+    };
+  }, []);
+
+  /* ==================================================== */
+  /* CLEANUP                                              */
+  /* ==================================================== */
 
   useEffect(() => {
     const aborters =
@@ -274,10 +438,14 @@ export default function Composer({
     return () => {
       recognitionRef.current?.abort?.();
 
-      recognitionRef.current = null;
+      recognitionRef.current =
+        null;
 
       aborters.forEach(
-        (entry) => entry.abort(),
+        (
+          entry,
+        ) =>
+          entry.abort(),
       );
 
       aborters.clear();
@@ -287,69 +455,144 @@ export default function Composer({
   useEffect(() => {
     attachmentsRef.current =
       attachments;
-  }, [attachments]);
+  }, [
+    attachments,
+  ]);
 
-  const selectedModel = useMemo(() => {
-    return (
-      availableModels.find(
-        (item) => item.id === model,
-      ) ??
-      availableModels[0] ??
-      MODELS[0]
+  /* ==================================================== */
+  /* MODEL                                                */
+  /* ==================================================== */
+
+  const selectedModel =
+    useMemo(
+      () =>
+        availableModels.find(
+          (
+            item,
+          ) =>
+            item.id ===
+            model,
+        ) ??
+        availableModels[
+          0
+        ] ??
+        MODELS[
+          0
+        ],
+
+      [
+        model,
+      ],
     );
-  }, [model]);
 
   const canSend =
-    message.trim().length > 0 ||
+    message
+      .trim()
+      .length >
+      0 ||
     attachments.some(
-      (item) =>
-        item.status === "ready" &&
-        Boolean(item.serverId),
+      (
+        item,
+      ) =>
+        item.status ===
+          "ready" &&
+        Boolean(
+          item.serverId,
+        ),
     );
 
   function changeChatMode(
-    mode: ChatMode,
+    mode:
+      ChatMode,
   ) {
-    setChatMode(mode);
-    setActiveChatMode(mode);
+    setChatMode(
+      mode,
+    );
+
+    setActiveChatMode(
+      mode,
+    );
+
+    window.dispatchEvent(
+      new CustomEvent(
+        "clawbit:chat-mode-updated",
+
+        {
+          detail: {
+            mode,
+          },
+        },
+      ),
+    );
   }
 
+  /* ==================================================== */
+  /* ATTACHMENT STATE                                     */
+  /* ==================================================== */
+
   function patchAttachment(
-    id: string,
+    id:
+      string,
+
     updater: (
-      item: AttachmentItem,
+      item:
+        AttachmentItem,
     ) => AttachmentItem,
   ) {
-    setAttachments((current) =>
-      current.map((item) =>
-        item.id === id
-          ? updater(item)
-          : item,
-      ),
+    setAttachments(
+      (
+        current,
+      ) =>
+        current.map(
+          (
+            item,
+          ) =>
+            item.id ===
+            id
+              ? updater(
+                  item,
+                )
+              : item,
+        ),
     );
   }
 
   function removeAttachment(
-    id: string,
+    id:
+      string,
   ) {
     uploadAbortersRef.current
-      .get(id)
+      .get(
+        id,
+      )
       ?.abort();
 
-    uploadAbortersRef.current.delete(id);
+    uploadAbortersRef.current.delete(
+      id,
+    );
 
-    setAttachments((current) =>
-      current.filter(
-        (item) => item.id !== id,
-      ),
+    setAttachments(
+      (
+        current,
+      ) =>
+        current.filter(
+          (
+            item,
+          ) =>
+            item.id !==
+            id,
+        ),
     );
   }
 
   function normalizeUploadFile(
-    file: File,
+    file:
+      File,
   ) {
     if (
-      /\.[a-z0-9]+$/i.test(file.name)
+      /\.[a-z0-9]+$/i.test(
+        file.name,
+      )
     ) {
       return file;
     }
@@ -359,20 +602,32 @@ export default function Composer({
         file.type.toLowerCase()
       ];
 
-    if (!extension) {
+    if (
+      !extension
+    ) {
       return file;
     }
 
     return new File(
-      [file],
+      [
+        file,
+      ],
+
       `${file.name}.${extension}`,
+
       {
-        type: file.type,
+        type:
+          file.type,
+
         lastModified:
           file.lastModified,
       },
     );
   }
+
+  /* ==================================================== */
+  /* VOICE                                                */
+  /* ==================================================== */
 
   function stopVoiceRecording() {
     recognitionRef.current?.stop?.();
@@ -382,12 +637,19 @@ export default function Composer({
     const finalText =
       voiceTranscriptRef.current.trim();
 
-    recognitionRef.current = null;
+    recognitionRef.current =
+      null;
 
-    setIsRecording(false);
+    setIsRecording(
+      false,
+    );
 
-    if (finalText) {
-      setMessage(finalText);
+    if (
+      finalText
+    ) {
+      setMessage(
+        finalText,
+      );
     }
   }
 
@@ -405,7 +667,9 @@ export default function Composer({
       recognitionWindow.SpeechRecognition ??
       recognitionWindow.webkitSpeechRecognition;
 
-    if (!SpeechRecognition) {
+    if (
+      !SpeechRecognition
+    ) {
       setVoiceNotice(
         "Voice input is not supported in this browser. Try Chrome or Edge.",
       );
@@ -413,8 +677,11 @@ export default function Composer({
       return;
     }
 
-    if (recognitionRef.current) {
+    if (
+      recognitionRef.current
+    ) {
       stopVoiceRecording();
+
       return;
     }
 
@@ -427,73 +694,107 @@ export default function Composer({
     voiceTranscriptRef.current =
       message.trim();
 
-    setVoiceNotice(null);
+    setVoiceNotice(
+      null,
+    );
 
-    recognition.lang = "en-US";
-    recognition.interimResults = true;
-    recognition.continuous = false;
+    recognition.lang =
+      "en-US";
 
-    recognition.onstart = () => {
-      setIsRecording(true);
-    };
+    recognition.interimResults =
+      true;
 
-    recognition.onresult = (
-      event,
-    ) => {
-      const transcript =
-        Array.from(event.results)
-          .map(
-            (result) =>
-              result[0]?.transcript ??
-              "",
+    recognition.continuous =
+      false;
+
+    recognition.onstart =
+      () => {
+        setIsRecording(
+          true,
+        );
+      };
+
+    recognition.onresult =
+      (
+        event,
+      ) => {
+        const transcript =
+          Array.from(
+            event.results,
           )
-          .join(" ")
-          .trim();
+            .map(
+              (
+                result,
+              ) =>
+                result[
+                  0
+                ]
+                  ?.transcript ??
+                "",
+            )
+            .join(
+              " ",
+            )
+            .trim();
 
-      const combinedText = [
-        voiceBaseMessageRef.current.trim(),
-        transcript,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .trim();
+        const combinedText =
+          [
+            voiceBaseMessageRef.current.trim(),
 
-      voiceTranscriptRef.current =
-        combinedText;
+            transcript,
+          ]
+            .filter(
+              Boolean,
+            )
+            .join(
+              " ",
+            )
+            .trim();
 
-      setMessage(combinedText);
+        voiceTranscriptRef.current =
+          combinedText;
 
-      textareaRef.current?.focus();
-    };
-
-    recognition.onend = () => {
-      finalizeVoicePrompt();
-    };
-
-    recognition.onerror = (
-      event,
-    ) => {
-      recognitionRef.current = null;
-
-      setIsRecording(false);
-
-      voiceTranscriptRef.current =
-        voiceBaseMessageRef.current;
-
-      if (
-        event.error === "not-allowed" ||
-        event.error ===
-          "service-not-allowed"
-      ) {
-        setVoiceNotice(
-          "Microphone access was denied. Please allow access and try again.",
+        setMessage(
+          combinedText,
         );
-      } else {
-        setVoiceNotice(
-          "Voice input stopped unexpectedly. Please try again.",
+
+        textareaRef.current?.focus();
+      };
+
+    recognition.onend =
+      () => {
+        finalizeVoicePrompt();
+      };
+
+    recognition.onerror =
+      (
+        event,
+      ) => {
+        recognitionRef.current =
+          null;
+
+        setIsRecording(
+          false,
         );
-      }
-    };
+
+        voiceTranscriptRef.current =
+          voiceBaseMessageRef.current;
+
+        if (
+          event.error ===
+            "not-allowed" ||
+          event.error ===
+            "service-not-allowed"
+        ) {
+          setVoiceNotice(
+            "Microphone access was denied. Please allow access and try again.",
+          );
+        } else {
+          setVoiceNotice(
+            "Voice input stopped unexpectedly. Please try again.",
+          );
+        }
+      };
 
     recognitionRef.current =
       recognition;
@@ -501,9 +802,12 @@ export default function Composer({
     try {
       recognition.start();
     } catch {
-      recognitionRef.current = null;
+      recognitionRef.current =
+        null;
 
-      setIsRecording(false);
+      setIsRecording(
+        false,
+      );
 
       setVoiceNotice(
         "Voice input could not start in this browser.",
@@ -511,30 +815,49 @@ export default function Composer({
     }
   }
 
+  /* ==================================================== */
+  /* FILE HELPERS                                         */
+  /* ==================================================== */
+
   function formatBytes(
-    size: number,
+    size:
+      number,
   ) {
-    if (size < 1024) {
+    if (
+      size <
+      1024
+    ) {
       return `${size} B`;
     }
 
     if (
-      size < 1024 * 1024
+      size <
+      1024 *
+        1024
     ) {
       return `${Math.round(
-        size / 1024,
+        size /
+          1024,
       )} KB`;
     }
 
     return `${(
       size /
-      (1024 * 1024)
-    ).toFixed(1)} MB`;
+      (
+        1024 *
+        1024
+      )
+    ).toFixed(
+      1,
+    )} MB`;
   }
 
   function classifyFile(
-    file: File,
-  ): AttachmentKind | null {
+    file:
+      File,
+  ):
+    | AttachmentKind
+    | null {
     const lowerName =
       file.name.toLowerCase();
 
@@ -543,7 +866,9 @@ export default function Composer({
 
     const isDocument =
       acceptedExtensions.some(
-        (extension) =>
+        (
+          extension,
+        ) =>
           lowerName.endsWith(
             extension,
           ),
@@ -560,11 +885,15 @@ export default function Composer({
         file.name,
       );
 
-    if (isImage) {
+    if (
+      isImage
+    ) {
       return "image";
     }
 
-    if (isDocument) {
+    if (
+      isDocument
+    ) {
       return "document";
     }
 
@@ -584,13 +913,17 @@ export default function Composer({
   }
 
   function summarizeFile(
-    file: File,
-    kind: AttachmentKind,
+    file:
+      File,
+
+    kind:
+      AttachmentKind,
   ) {
     return {
       detail:
         `${
-          kind === "image"
+          kind ===
+          "image"
             ? "Image"
             : "Document"
         } · ${formatBytes(
@@ -600,7 +933,8 @@ export default function Composer({
       kind,
 
       mimeType:
-        file.type || "",
+        file.type ||
+        "",
 
       name:
         file.name,
@@ -610,31 +944,55 @@ export default function Composer({
     };
   }
 
+  /* ==================================================== */
+  /* FILE UPLOAD                                          */
+  /* ==================================================== */
+
   async function addFiles(
-    list: FileList | null,
+    list:
+      FileList | null,
   ) {
-    if (!list?.length) return;
+    if (
+      !list?.length
+    ) {
+      return;
+    }
 
     const files =
-      Array.from(list);
+      Array.from(
+        list,
+      );
 
-    for (const file of files) {
+    for (
+      const file of
+      files
+    ) {
       const kind =
-        classifyFile(file);
+        classifyFile(
+          file,
+        );
 
       const uploadFile =
-        normalizeUploadFile(file);
+        normalizeUploadFile(
+          file,
+        );
 
       const localId =
         crypto.randomUUID();
 
-      if (!kind) {
+      if (
+        !kind
+      ) {
         setAttachments(
-          (current) => [
+          (
+            current,
+          ) => [
             {
-              id: localId,
+              id:
+                localId,
 
-              kind: "document",
+              kind:
+                "document",
 
               name:
                 file.name,
@@ -648,7 +1006,8 @@ export default function Composer({
                 file.size,
 
               mimeType:
-                file.type || "",
+                file.type ||
+                "",
 
               status:
                 "error",
@@ -674,9 +1033,12 @@ export default function Composer({
         );
 
       setAttachments(
-        (current) => [
+        (
+          current,
+        ) => [
           {
-            id: localId,
+            id:
+              localId,
 
             ...summary,
 
@@ -697,11 +1059,17 @@ export default function Composer({
           uploadFile,
           {
             onProgress:
-              (progress) => {
+              (
+                progress,
+              ) => {
                 patchAttachment(
                   localId,
-                  (item) => ({
+
+                  (
+                    item,
+                  ) => ({
                     ...item,
+
                     progress,
                   }),
                 );
@@ -715,45 +1083,58 @@ export default function Composer({
       );
 
       uploader.promise
-        .then((response) => {
-          patchAttachment(
-            localId,
-            (item) => ({
-              ...item,
-
-              serverId:
-                response.attachment_id,
-
-              preview:
-                response.preview,
-
-              progress:
-                100,
-
-              status:
-                "ready",
-
-              mimeType:
-                response.mime_type ||
-                item.mimeType,
-
-              detail:
-                `${
-                  item.kind ===
-                  "image"
-                    ? "Image"
-                    : "Document"
-                } · ${formatBytes(
-                  item.size,
-                )}`,
-            }),
-          );
-        })
-        .catch(
-          (error: Error) => {
+        .then(
+          (
+            response,
+          ) => {
             patchAttachment(
               localId,
-              (item) => ({
+
+              (
+                item,
+              ) => ({
+                ...item,
+
+                serverId:
+                  response.attachment_id,
+
+                preview:
+                  response.preview,
+
+                progress:
+                  100,
+
+                status:
+                  "ready",
+
+                mimeType:
+                  response.mime_type ||
+                  item.mimeType,
+
+                detail:
+                  `${
+                    item.kind ===
+                    "image"
+                      ? "Image"
+                      : "Document"
+                  } · ${formatBytes(
+                    item.size,
+                  )}`,
+              }),
+            );
+          },
+        )
+        .catch(
+          (
+            error:
+              Error,
+          ) => {
+            patchAttachment(
+              localId,
+
+              (
+                item,
+              ) => ({
                 ...item,
 
                 error:
@@ -766,11 +1147,13 @@ export default function Composer({
             );
           },
         )
-        .finally(() => {
-          uploadAbortersRef.current.delete(
-            localId,
-          );
-        });
+        .finally(
+          () => {
+            uploadAbortersRef.current.delete(
+              localId,
+            );
+          },
+        );
     }
   }
 
@@ -778,9 +1161,13 @@ export default function Composer({
     const pending =
       attachmentsRef.current
         .map(
-          (item) =>
+          (
+            item,
+          ) =>
             uploadAbortersRef.current
-              .get(item.id)
+              .get(
+                item.id,
+              )
               ?.promise,
         )
         .filter(
@@ -788,11 +1175,14 @@ export default function Composer({
             promise,
           ):
             promise is Promise<unknown> =>
-              Boolean(promise),
+              Boolean(
+                promise,
+              ),
         );
 
     if (
-      pending.length === 0
+      pending.length ===
+      0
     ) {
       return;
     }
@@ -802,15 +1192,22 @@ export default function Composer({
     );
   }
 
+  /* ==================================================== */
+  /* DRAG / DROP                                          */
+  /* ==================================================== */
+
   async function handleDrop(
     event:
       DragEvent<HTMLDivElement>,
   ) {
     event.preventDefault();
 
-    dragDepthRef.current = 0;
+    dragDepthRef.current =
+      0;
 
-    setIsDragging(false);
+    setIsDragging(
+      false,
+    );
 
     await addFiles(
       event.dataTransfer.files,
@@ -823,9 +1220,12 @@ export default function Composer({
   ) {
     event.preventDefault();
 
-    dragDepthRef.current += 1;
+    dragDepthRef.current +=
+      1;
 
-    setIsDragging(true);
+    setIsDragging(
+      true,
+    );
   }
 
   function handleDragLeave(
@@ -834,28 +1234,44 @@ export default function Composer({
   ) {
     event.preventDefault();
 
-    dragDepthRef.current -= 1;
+    dragDepthRef.current -=
+      1;
 
     if (
-      dragDepthRef.current <= 0
+      dragDepthRef.current <=
+      0
     ) {
-      dragDepthRef.current = 0;
+      dragDepthRef.current =
+        0;
 
-      setIsDragging(false);
+      setIsDragging(
+        false,
+      );
     }
   }
 
+  /* ==================================================== */
+  /* SEND                                                 */
+  /* ==================================================== */
+
   async function send(
-    overrideMessage?: string,
+    overrideMessage?:
+      string,
   ) {
-    if (loading) return;
+    if (
+      loading
+    ) {
+      return;
+    }
 
     await waitForUploads();
 
     const readyAttachmentIds =
       attachmentsRef.current
         .filter(
-          (item) =>
+          (
+            item,
+          ) =>
             item.status ===
               "ready" &&
             Boolean(
@@ -863,41 +1279,50 @@ export default function Composer({
             ),
         )
         .map(
-          (item) =>
+          (
+            item,
+          ) =>
             item.serverId!,
         );
 
     const readyAttachments =
       attachmentsRef.current
         .filter(
-          (item) =>
+          (
+            item,
+          ) =>
             item.status ===
               "ready" &&
             Boolean(
               item.serverId,
             ),
         )
-        .map((item) => ({
-          id: item.serverId!,
+        .map(
+          (
+            item,
+          ) => ({
+            id:
+              item.serverId!,
 
-          name:
-            item.name,
+            name:
+              item.name,
 
-          size:
-            item.size,
+            size:
+              item.size,
 
-          mimeType:
-            item.mimeType,
+            mimeType:
+              item.mimeType,
 
-          detail:
-            item.detail,
+            detail:
+              item.detail,
 
-          preview:
-            item.preview,
+            preview:
+              item.preview,
 
-          kind:
-            item.kind,
-        }));
+            kind:
+              item.kind,
+          }),
+        );
 
     const trimmed =
       (
@@ -907,7 +1332,8 @@ export default function Composer({
 
     if (
       !trimmed &&
-      readyAttachmentIds.length === 0
+      readyAttachmentIds.length ===
+        0
     ) {
       return;
     }
@@ -917,8 +1343,12 @@ export default function Composer({
     );
 
     setMessage("");
+
     setAttachments([]);
-    setVoiceNotice(null);
+
+    setVoiceNotice(
+      null,
+    );
 
     await onSend(
       trimmed,
@@ -926,9 +1356,12 @@ export default function Composer({
     );
   }
 
+  /* ==================================================== */
+  /* UI                                                   */
+  /* ==================================================== */
+
   return (
     <div className="px-5 pb-5 pt-2 lg:px-8">
-
       <motion.div
         layout
 
@@ -936,10 +1369,14 @@ export default function Composer({
           handleDragEnter
         }
 
-        onDragOver={(event) => {
+        onDragOver={(
+          event,
+        ) => {
           event.preventDefault();
 
-          setIsDragging(true);
+          setIsDragging(
+            true,
+          );
         }}
 
         onDragLeave={
@@ -951,260 +1388,298 @@ export default function Composer({
         }
 
         className={cn(
-          "mx-auto max-w-[860px] overflow-visible rounded-[28px] border",
+          "mx-auto max-w-[860px] overflow-visible rounded-[26px] border transition-colors",
 
           theme === "dark"
-            ? "border-white/[0.07] bg-[#212121]"
-            : "border-black/[0.08] bg-[#f1f1f1]",
+            ? "border-white/[0.09] bg-[#202020]"
+            : "border-black/[0.10] bg-white",
 
           isDragging
-            ? "ring-2 ring-white/[0.12]"
+            ? theme ===
+              "dark"
+              ? "ring-2 ring-white/[0.18]"
+              : "ring-2 ring-black/[0.14]"
             : "",
         )}
       >
+        {/* ============================================= */}
+        {/* ATTACHMENTS                                   */}
+        {/* ============================================= */}
 
-        {/* ATTACHMENTS */}
-
-        {attachments.length > 0 ? (
+        {attachments.length >
+        0 ? (
           <div className="px-4 pb-1 pt-3">
-
             <div className="flex flex-wrap gap-2">
-
               {attachments.map(
-                (item) => (
+                (
+                  item,
+                ) => (
                   <div
-                    key={item.id}
-
+                    key={
+                      item.id
+                    }
                     className={cn(
-                      "flex max-w-[300px] items-center gap-2 rounded-[13px] border px-3 py-2",
+                      "flex max-w-[300px] items-center gap-2 rounded-[12px] border px-3 py-2",
 
                       item.status ===
                       "error"
-                        ? "border-red-500/25 bg-red-500/[0.07]"
+                        ? theme ===
+                          "dark"
+                          ? "border-red-500/30 bg-red-500/[0.08] text-red-100"
+                          : "border-red-200 bg-red-50 text-red-900"
                         : theme ===
-                            "dark"
-                          ? "border-white/[0.07] bg-[#292929]"
-                          : "border-black/[0.08] bg-white",
+                          "dark"
+                          ? "border-white/[0.08] bg-[#292929] text-zinc-100"
+                          : "border-black/[0.09] bg-[#f7f7f7] text-zinc-900",
                     )}
                   >
-
                     <Paperclip
-                      size={14}
+                      size={
+                        14
+                      }
+                      className={cn(
+                        "shrink-0",
 
-                      className="shrink-0 text-zinc-500"
+                        theme === "dark"
+                          ? "text-zinc-500"
+                          : "text-zinc-500",
+                      )}
                     />
 
-
                     <div className="min-w-0 flex-1">
-
                       <p className="truncate text-[11px] font-medium">
-                        {item.name}
+                        {
+                          item.name
+                        }
                       </p>
 
+                      <p
+                        className={cn(
+                          "mt-0.5 truncate text-[9px]",
 
-                      <p className="mt-0.5 truncate text-[9px] text-zinc-500">
-
+                          item.status ===
+                          "error"
+                            ? theme ===
+                              "dark"
+                              ? "text-red-300"
+                              : "text-red-600"
+                            : "text-zinc-500",
+                        )}
+                      >
                         {item.status ===
                         "uploading"
                           ? `Uploading ${item.progress}%`
-
                           : item.status ===
                               "error"
                             ? item.error ??
                               "Upload failed"
-
                             : item.detail}
-
                       </p>
-
                     </div>
-
 
                     <button
                       type="button"
-
+                      aria-label={`Remove ${item.name}`}
                       onClick={() =>
                         removeAttachment(
                           item.id,
                         )
                       }
+                      className={cn(
+                        "flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors",
 
-                      className="flex h-6 w-6 items-center justify-center rounded-full text-zinc-500 hover:bg-white/[0.08] hover:text-white"
+                        theme === "dark"
+                          ? "text-zinc-500 hover:bg-white/[0.08] hover:text-white"
+                          : "text-zinc-500 hover:bg-black/[0.06] hover:text-black",
+                      )}
                     >
-
-                      <X size={12} />
-
+                      <X
+                        size={
+                          12
+                        }
+                      />
                     </button>
-
                   </div>
                 ),
               )}
-
             </div>
-
           </div>
         ) : null}
 
-
-        {/*
-          Symmetrical composer.
-
-          Outer height:
-          56px
-
-          top gap:
-          7px
-
-          bottom gap:
-          7px
-
-          left control:
-          40px
-
-          right controls:
-          40px height
-        */}
+        {/* ============================================= */}
+        {/* MAIN ROW                                      */}
+        {/* ============================================= */}
 
         <div className="grid min-h-[56px] grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-x-1 px-2 py-[7px]">
+          {/* ADD FILES */}
 
-          {/* PLUS */}
-
-          <TooltipButton label="Add files">
-
+          <TooltipButton
+            label="Add files"
+            theme={theme}
+          >
             <motion.button
               type="button"
 
-              whileHover={{
-                scale: 1.07,
-              }}
-
               whileTap={{
-                scale: 0.92,
+                scale:
+                  0.94,
               }}
 
               onClick={() =>
-                fileInputRef.current
-                  ?.click()
+                fileInputRef.current?.click()
               }
 
               aria-label="Add files"
 
               className={cn(
-                "flex h-10 w-10 items-center justify-center rounded-full",
+                "flex h-10 w-10 items-center justify-center rounded-full transition-colors",
 
                 theme === "dark"
                   ? "text-zinc-300 hover:bg-white/[0.07] hover:text-white"
-                  : "text-zinc-700 hover:bg-black/[0.05]",
+                  : "text-zinc-600 hover:bg-black/[0.055] hover:text-black",
               )}
             >
-
               <Plus
-                size={21}
-                strokeWidth={1.8}
+                size={
+                  21
+                }
+                strokeWidth={
+                  1.8
+                }
               />
-
             </motion.button>
-
           </TooltipButton>
-
 
           {/* INPUT */}
 
           <TextareaAutosize
-  ref={textareaRef}
-  minRows={1}
-  maxRows={6}
-  value={message}
-  placeholder="Ask Clawbit"
-  onChange={(event) =>
-    setMessage(
-      event.target.value,
-    )
-  }
-  onKeyDown={(event) => {
-    if (
-      event.key === "Enter" &&
-      !event.shiftKey
-    ) {
-      event.preventDefault();
+            ref={
+              textareaRef
+            }
 
-      void send();
-    }
-  }}
-  className={cn(
-    "block w-full min-w-0 resize-none border-0 bg-transparent px-3 py-0 text-[16px] leading-[24px] font-medium tracking-[-0.015em]",
-    "outline-none ring-0 shadow-none",
-    "focus:border-0 focus:outline-none focus:ring-0 focus:shadow-none",
-    "focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none",
+            minRows={
+              1
+            }
 
-    theme === "dark"
-      ? "text-[#f2f2f2] placeholder:text-[#b8b8b8]"
-      : "text-zinc-900 placeholder:text-zinc-500",
-  )}
-  style={{
-    outline: "none",
-    border: "none",
-    boxShadow: "none",
-  }}
-/>
+            maxRows={
+              6
+            }
 
+            value={
+              message
+            }
 
-          {/* RIGHT CONTROLS */}
+            placeholder={`Ask ${
+              assistantName.trim() ||
+              "Clawbit"
+            }`}
+
+            onChange={(
+              event,
+            ) =>
+              setMessage(
+                event
+                  .target
+                  .value,
+              )
+            }
+
+            onKeyDown={(
+              event,
+            ) => {
+              if (
+                event.key ===
+                  "Enter" &&
+                !event.shiftKey
+              ) {
+                event.preventDefault();
+
+                void send();
+              }
+            }}
+
+            className={cn(
+              "block w-full min-w-0 resize-none border-0 bg-transparent px-3 py-0 text-[15px] font-normal leading-[24px] tracking-[-0.01em]",
+
+              "outline-none ring-0 shadow-none",
+
+              "focus:border-0 focus:outline-none focus:ring-0 focus:shadow-none",
+
+              "focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none",
+
+              theme === "dark"
+                ? "text-zinc-100 placeholder:text-zinc-500"
+                : "text-zinc-900 placeholder:text-zinc-500",
+            )}
+
+            style={{
+              outline:
+                "none",
+
+              border:
+                "none",
+
+              boxShadow:
+                "none",
+            }}
+          />
+
+          {/* =========================================== */}
+          {/* RIGHT CONTROLS                              */}
+          {/* =========================================== */}
 
           <div className="flex h-10 shrink-0 items-center gap-0.5">
-
             {/* MODEL */}
 
             <Popover.Root
-              open={modelOpen}
-
+              open={
+                modelOpen
+              }
               onOpenChange={
                 setModelOpen
               }
             >
-
-              <Popover.Trigger asChild>
-
+              <Popover.Trigger
+                asChild
+              >
                 <motion.button
                   type="button"
 
-                  whileHover={{
-                    backgroundColor:
-                      theme === "dark"
-                        ? "rgba(255,255,255,0.065)"
-                        : "rgba(0,0,0,0.05)",
-                  }}
-
                   whileTap={{
-                    scale: 0.97,
+                    scale:
+                      0.97,
                   }}
 
                   className={cn(
-                    "flex h-10 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium",
+                    "flex h-9 max-w-[215px] shrink-0 items-center gap-1.5 rounded-[10px] border border-transparent px-2.5 text-[12px] font-medium transition-colors",
 
                     theme === "dark"
-                      ? "text-zinc-200"
-                      : "text-zinc-700",
+                      ? "text-zinc-300 hover:bg-white/[0.06] hover:text-white"
+                      : "text-zinc-700 hover:bg-black/[0.045] hover:text-black",
+
+                    modelOpen
+                      ? theme ===
+                        "dark"
+                        ? "bg-white/[0.07]"
+                        : "bg-black/[0.05]"
+                      : "",
                   )}
                 >
-
                   {chatMode ===
                   "research" ? (
                     <Telescope
-                      size={14}
+                      size={
+                        14
+                      }
+                      className="shrink-0"
                     />
                   ) : null}
 
-
                   <span className="max-w-[165px] truncate">
-
                     {
-                      selectedModel
-                        .label
+                      selectedModel.label
                     }
-
                   </span>
-
 
                   <motion.span
                     animate={{
@@ -1213,37 +1688,24 @@ export default function Composer({
                           ? 180
                           : 0,
                     }}
-
                     transition={{
-                      duration: 0.24,
-                      ease:
-                        "easeInOut",
+                      duration:
+                        0.18,
                     }}
                   >
-
                     <ChevronDown
-                      size={13}
-
+                      size={
+                        13
+                      }
                       className="text-zinc-500"
                     />
-
                   </motion.span>
-
                 </motion.button>
-
               </Popover.Trigger>
 
-
-              {/*
-                IMPORTANT:
-                The portal/content are ALWAYS mounted.
-
-                That allows the CLOSED animation
-                to play completely.
-              */}
-
-              <Popover.Portal forceMount>
-
+              <Popover.Portal
+                forceMount
+              >
                 <Popover.Content
                   forceMount
 
@@ -1251,33 +1713,41 @@ export default function Composer({
 
                   align="end"
 
-                  sideOffset={10}
+                  sideOffset={
+                    10
+                  }
 
                   asChild
                 >
-
                   <motion.div
-                    initial={false}
+                    initial={
+                      false
+                    }
 
                     animate={
                       modelOpen
                         ? {
-                            opacity: 1,
+                            opacity:
+                              1,
 
-                            y: 0,
+                            y:
+                              0,
 
-                            scale: 1,
+                            scale:
+                              1,
 
                             pointerEvents:
                               "auto",
                           }
-
                         : {
-                            opacity: 0,
+                            opacity:
+                              0,
 
-                            y: 9,
+                            y:
+                              8,
 
-                            scale: 0.97,
+                            scale:
+                              0.98,
 
                             pointerEvents:
                               "none",
@@ -1285,79 +1755,38 @@ export default function Composer({
                     }
 
                     transition={{
-                      opacity: {
-                        duration:
-                          0.22,
-
-                        ease:
-                          "easeInOut",
-                      },
-
-                      y: {
-                        duration:
-                          0.24,
-
-                        ease: [
-                          0.16,
-                          1,
-                          0.3,
-                          1,
-                        ],
-                      },
-
-                      scale: {
-                        duration:
-                          0.24,
-
-                        ease: [
-                          0.16,
-                          1,
-                          0.3,
-                          1,
-                        ],
-                      },
+                      duration:
+                        0.18,
                     }}
 
                     className={cn(
-                      "z-[100] w-[330px] origin-bottom-right rounded-[18px] border p-2 shadow-[0_24px_75px_rgba(0,0,0,0.70)]",
+                      "z-[200] w-[330px] origin-bottom-right rounded-[16px] border p-2 shadow-[0_18px_55px_rgba(0,0,0,0.18)]",
 
                       theme === "dark"
-                        ? "border-white/[0.08] bg-[#242424] text-white"
+                        ? "border-white/[0.09] bg-[#181818] text-white"
                         : "border-black/[0.10] bg-white text-zinc-900",
                     )}
                   >
-
                     {/* MODELS */}
 
                     <div className="space-y-1">
-
                       {availableModels.map(
-                        (item) => {
+                        (
+                          item,
+                        ) => {
                           const selected =
                             item.id ===
-                            model;
+                              model &&
+                            chatMode ===
+                              "normal";
 
                           return (
-                            <motion.button
+                            <button
                               key={
                                 item.id
                               }
 
                               type="button"
-
-                              whileHover={{
-                                x: 2,
-                              }}
-
-                              whileTap={{
-                                scale:
-                                  0.985,
-                              }}
-
-                              transition={{
-                                duration:
-                                  0.14,
-                              }}
 
                               onClick={() => {
                                 onModelChange(
@@ -1374,59 +1803,54 @@ export default function Composer({
                               }}
 
                               className={cn(
-                                "flex w-full items-center gap-3 rounded-[13px] px-3 py-2.5 text-left",
+                                "flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 text-left transition-colors",
 
-                                selected &&
-                                chatMode ===
-                                  "normal"
+                                selected
                                   ? theme ===
                                     "dark"
-                                    ? "bg-white/[0.07]"
-                                    : "bg-black/[0.05]"
-
+                                    ? "bg-white/[0.09]"
+                                    : "bg-black/[0.065]"
                                   : theme ===
                                     "dark"
                                     ? "hover:bg-white/[0.055]"
-                                    : "hover:bg-black/[0.04]",
+                                    : "hover:bg-black/[0.045]",
                               )}
                             >
-
                               <div className="min-w-0 flex-1">
+                                <p
+                                  className={cn(
+                                    "truncate text-[13px] font-medium",
 
-                                <p className="truncate text-[13px] font-medium">
+                                    theme === "dark"
+                                      ? "text-zinc-100"
+                                      : "text-zinc-900",
+                                  )}
+                                >
                                   {
                                     item.label
                                   }
                                 </p>
-
 
                                 <p className="mt-0.5 truncate text-[11px] text-zinc-500">
                                   {
                                     item.description
                                   }
                                 </p>
-
                               </div>
 
-
-                              {selected &&
-                              chatMode ===
-                                "normal" ? (
-
+                              {selected ? (
                                 <Check
-                                  size={16}
+                                  size={
+                                    16
+                                  }
                                   className="shrink-0"
                                 />
-
                               ) : null}
-
-                            </motion.button>
+                            </button>
                           );
                         },
                       )}
-
                     </div>
-
 
                     {/* SEPARATOR */}
 
@@ -1440,25 +1864,10 @@ export default function Composer({
                       )}
                     />
 
-
                     {/* RESEARCH */}
 
-                    <motion.button
+                    <button
                       type="button"
-
-                      whileHover={{
-                        x: 2,
-                      }}
-
-                      whileTap={{
-                        scale:
-                          0.985,
-                      }}
-
-                      transition={{
-                        duration:
-                          0.14,
-                      }}
 
                       onClick={() => {
                         changeChatMode(
@@ -1474,72 +1883,67 @@ export default function Composer({
                       }}
 
                       className={cn(
-                        "flex w-full items-center gap-3 rounded-[13px] px-3 py-3 text-left",
+                        "flex w-full items-center gap-3 rounded-[11px] px-3 py-3 text-left transition-colors",
 
                         chatMode ===
                         "research"
                           ? theme ===
                             "dark"
-                            ? "bg-white/[0.08]"
-                            : "bg-black/[0.06]"
-
+                            ? "bg-white/[0.09]"
+                            : "bg-black/[0.065]"
                           : theme ===
                             "dark"
                             ? "hover:bg-white/[0.055]"
-                            : "hover:bg-black/[0.04]",
+                            : "hover:bg-black/[0.045]",
                       )}
                     >
-
                       <div
                         className={cn(
-                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]",
+                          "flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px]",
 
                           theme === "dark"
                             ? "bg-white/[0.06]"
                             : "bg-black/[0.05]",
                         )}
                       >
-
                         <Telescope
-                          size={16}
+                          size={
+                            16
+                          }
                         />
-
                       </div>
 
-
                       <div className="min-w-0 flex-1">
+                        <p
+                          className={cn(
+                            "text-[13px] font-medium",
 
-                        <p className="text-[13px] font-medium">
+                            theme === "dark"
+                              ? "text-zinc-100"
+                              : "text-zinc-900",
+                          )}
+                        >
                           Research mode
                         </p>
-
 
                         <p className="mt-0.5 text-[11px] text-zinc-500">
                           Deeper web research and source checking
                         </p>
-
                       </div>
-
 
                       {chatMode ===
                       "research" ? (
-
                         <Check
-                          size={16}
+                          size={
+                            16
+                          }
                         />
-
                       ) : null}
-
-                    </motion.button>
-
+                    </button>
                   </motion.div>
-
                 </Popover.Content>
-
               </Popover.Portal>
-
             </Popover.Root>
-
 
             {/* MIC */}
 
@@ -1549,17 +1953,16 @@ export default function Composer({
                   ? "Stop dictation"
                   : "Dictate"
               }
+              theme={
+                theme
+              }
             >
-
               <motion.button
                 type="button"
 
-                whileHover={{
-                  scale: 1.07,
-                }}
-
                 whileTap={{
-                  scale: 0.92,
+                  scale:
+                    0.94,
                 }}
 
                 onClick={() => {
@@ -1574,60 +1977,64 @@ export default function Composer({
                   startVoiceRecording();
                 }}
 
-                aria-label="Dictate"
+                aria-label={
+                  isRecording
+                    ? "Stop dictation"
+                    : "Dictate"
+                }
 
                 className={cn(
-                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",
 
                   isRecording
-                    ? theme === "dark"
+                    ? theme ===
+                      "dark"
                       ? "bg-white text-black"
                       : "bg-black text-white"
-
-                    : theme === "dark"
+                    : theme ===
+                      "dark"
                       ? "text-zinc-300 hover:bg-white/[0.07] hover:text-white"
-                      : "text-zinc-700 hover:bg-black/[0.05]",
+                      : "text-zinc-600 hover:bg-black/[0.055] hover:text-black",
                 )}
               >
-
                 <Mic
-                  size={19}
-
+                  size={
+                    19
+                  }
                   className={
                     isRecording
                       ? "animate-pulse"
                       : ""
                   }
                 />
-
               </motion.button>
-
             </TooltipButton>
-
 
             {/* SEND */}
 
             {canSend ? (
-
               <motion.button
                 type="button"
 
                 initial={{
-                  opacity: 0,
-                  scale: 0.8,
+                  opacity:
+                    0,
+
+                  scale:
+                    0.85,
                 }}
 
                 animate={{
-                  opacity: 1,
-                  scale: 1,
-                }}
+                  opacity:
+                    1,
 
-                whileHover={{
-                  scale: 1.06,
+                  scale:
+                    1,
                 }}
 
                 whileTap={{
-                  scale: 0.92,
+                  scale:
+                    0.93,
                 }}
 
                 disabled={
@@ -1641,44 +2048,55 @@ export default function Composer({
                 aria-label="Send"
 
                 className={cn(
-                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full",
+                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-opacity disabled:cursor-not-allowed disabled:opacity-50",
 
                   theme === "dark"
                     ? "bg-white text-black"
                     : "bg-black text-white",
                 )}
               >
-
                 <ArrowUp
-                  size={18}
-                  strokeWidth={2.2}
+                  size={
+                    18
+                  }
+                  strokeWidth={
+                    2.2
+                  }
                 />
-
               </motion.button>
-
             ) : null}
-
           </div>
-
         </div>
 
+        {/* ============================================= */}
+        {/* VOICE NOTICE                                  */}
+        {/* ============================================= */}
 
         {voiceNotice ||
         isRecording ? (
+          <div
+            className={cn(
+              "px-5 pb-3 text-[11px]",
 
-          <div className="px-5 pb-3 text-[11px] text-zinc-500">
-
+              theme === "dark"
+                ? "text-zinc-500"
+                : "text-zinc-500",
+            )}
+          >
             {isRecording
               ? "Listening..."
               : voiceNotice}
-
           </div>
-
         ) : null}
 
+        {/* ============================================= */}
+        {/* FILE INPUT                                    */}
+        {/* ============================================= */}
 
         <input
-          ref={fileInputRef}
+          ref={
+            fileInputRef
+          }
 
           type="file"
 
@@ -1688,7 +2106,9 @@ export default function Composer({
 
           className="hidden"
 
-          onChange={(event) => {
+          onChange={(
+            event,
+          ) => {
             void addFiles(
               event.target.files,
             );
@@ -1697,33 +2117,44 @@ export default function Composer({
               "";
           }}
         />
-
       </motion.div>
-
     </div>
   );
 }
 
+/* ====================================================== */
+/* TOOLTIP                                                */
+/* ====================================================== */
 
 function TooltipButton({
   label,
+  theme,
   children,
 }: {
-  label: string;
-  children: ReactNode;
+  label:
+    string;
+
+  theme:
+    Theme;
+
+  children:
+    ReactNode;
 }) {
   return (
     <div className="group relative shrink-0">
-
       {children}
 
+      <div
+        className={cn(
+          "pointer-events-none absolute bottom-[calc(100%+8px)] left-1/2 z-[300] -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-[8px] border px-2.5 py-1.5 text-[11px] font-medium opacity-0 shadow-lg transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100",
 
-      <div className="pointer-events-none absolute bottom-[calc(100%+9px)] left-1/2 z-[200] -translate-x-1/2 translate-y-1 whitespace-nowrap rounded-[9px] border border-white/[0.08] bg-[#242424] px-2.5 py-1.5 text-[11px] font-medium text-white opacity-0 shadow-[0_8px_25px_rgba(0,0,0,0.45)] transition-all duration-150 group-hover:translate-y-0 group-hover:opacity-100">
-
+          theme === "dark"
+            ? "border-white/[0.09] bg-[#181818] text-white"
+            : "border-black/[0.10] bg-white text-[#171717]",
+        )}
+      >
         {label}
-
       </div>
-
     </div>
   );
 }

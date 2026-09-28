@@ -1,7 +1,17 @@
 "use client";
 
-import { useState } from "react";
-import { Check, Copy, Pencil, Trash2, X } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Pencil,
+  X,
+} from "lucide-react";
+
+import {
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import UserAvatar from "@/components/common/UserAvatar";
 import type { Theme } from "@/lib/theme";
@@ -9,8 +19,19 @@ import { cn } from "@/lib/utils";
 
 interface Props {
   content: string;
+
   theme: Theme;
-  onEdit: (nextContent: string) => void | Promise<void>;
+
+  onEdit: (
+    nextContent: string,
+  ) => void | Promise<void>;
+
+  /*
+   * Kept in the prop contract so Message.tsx
+   * does not need to change.
+   *
+   * Delete is intentionally NOT exposed in the UI.
+   */
   onDelete: () => void;
 }
 
@@ -18,78 +39,287 @@ export default function UserMessage({
   content,
   theme,
   onEdit,
-  onDelete,
 }: Props) {
-  const [isEditing, setIsEditing] = useState(false);
-  const [draft, setDraft] = useState(content);
-  const [copied, setCopied] = useState(false);
+  const isDark =
+    theme === "dark";
+
+  const [
+    isEditing,
+    setIsEditing,
+  ] = useState(false);
+
+  const [
+    draft,
+    setDraft,
+  ] = useState(content);
+
+  const [
+    copied,
+    setCopied,
+  ] = useState(false);
+
+  const [
+    saving,
+    setSaving,
+  ] = useState(false);
+
+  const copyTimerRef =
+    useRef<number | null>(
+      null,
+    );
+
+  /* ====================================================== */
+  /* CLEANUP                                                */
+  /* ====================================================== */
+
+  useEffect(() => {
+    return () => {
+      if (
+        copyTimerRef.current !==
+        null
+      ) {
+        window.clearTimeout(
+          copyTimerRef.current,
+        );
+      }
+    };
+  }, []);
+
+  /* ====================================================== */
+  /* COPY                                                   */
+  /* ====================================================== */
 
   async function copyMessage() {
-    await navigator.clipboard.writeText(content);
-    setCopied(true);
+    try {
+      await navigator.clipboard.writeText(
+        content,
+      );
 
-    setTimeout(() => {
-      setCopied(false);
-    }, 1500);
+      setCopied(
+        true,
+      );
+
+      if (
+        copyTimerRef.current !==
+        null
+      ) {
+        window.clearTimeout(
+          copyTimerRef.current,
+        );
+      }
+
+      copyTimerRef.current =
+        window.setTimeout(
+          () => {
+            setCopied(
+              false,
+            );
+
+            copyTimerRef.current =
+              null;
+          },
+          1500,
+        );
+    } catch {
+      setCopied(
+        false,
+      );
+    }
+  }
+
+  /* ====================================================== */
+  /* EDIT                                                   */
+  /* ====================================================== */
+
+  function startEditing() {
+    setDraft(
+      content,
+    );
+
+    setIsEditing(
+      true,
+    );
+  }
+
+  function cancelEditing() {
+    if (
+      saving
+    ) {
+      return;
+    }
+
+    setDraft(
+      content,
+    );
+
+    setIsEditing(
+      false,
+    );
   }
 
   async function handleSave() {
-    const nextContent = draft.trim();
-    if (!nextContent) return;
+    const nextContent =
+      draft.trim();
 
-    await onEdit(nextContent);
-    setIsEditing(false);
+    if (
+      !nextContent ||
+      saving
+    ) {
+      return;
+    }
+
+    if (
+      nextContent ===
+      content.trim()
+    ) {
+      setIsEditing(
+        false,
+      );
+
+      return;
+    }
+
+    setSaving(
+      true,
+    );
+
+    try {
+      await onEdit(
+        nextContent,
+      );
+
+      setIsEditing(
+        false,
+      );
+    } finally {
+      setSaving(
+        false,
+      );
+    }
   }
+
+  /* ====================================================== */
+  /* UI                                                     */
+  /* ====================================================== */
 
   return (
     <div className="group flex justify-end">
       <div className="flex max-w-[min(86%,760px)] flex-row-reverse items-start gap-3">
         <UserAvatar className="mt-0.5" />
 
-        <div className="flex min-w-0 flex-col items-end">
+        <div className="flex min-w-0 flex-1 flex-col items-end">
           {isEditing ? (
             <div
               className={cn(
-                "rounded-[18px] rounded-br-[8px] border p-3 shadow-[0_8px_20px_rgba(15,23,42,0.04)]",
-                theme === "dark"
-                  ? "border-white/8 bg-[color:var(--surface)]"
-                  : "border-slate-300 bg-white",
+                "w-full min-w-[280px] rounded-[18px] border p-3",
+
+                isDark
+                  ? "border-white/[0.08] bg-[#111111]"
+                  : "border-black/[0.08] bg-white",
               )}
             >
               <textarea
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                rows={Math.max(2, Math.min(8, draft.split("\n").length))}
+                autoFocus
+                value={
+                  draft
+                }
+                onChange={(
+                  event,
+                ) =>
+                  setDraft(
+                    event.target.value,
+                  )
+                }
+                onKeyDown={(
+                  event,
+                ) => {
+                  if (
+                    event.key ===
+                    "Escape"
+                  ) {
+                    cancelEditing();
+                  }
+
+                  if (
+                    event.key ===
+                      "Enter" &&
+                    !event.shiftKey
+                  ) {
+                    event.preventDefault();
+
+                    void handleSave();
+                  }
+                }}
+                rows={Math.max(
+                  2,
+                  Math.min(
+                    8,
+                    draft.split(
+                      "\n",
+                    ).length,
+                  ),
+                )}
                 className={cn(
-                  "min-h-[68px] w-full resize-none rounded-[14px] border bg-transparent px-3 py-2 text-[14px] leading-6 outline-none",
-                  theme === "dark"
-                    ? "border-white/8 text-white placeholder:text-zinc-500"
-                    : "border-slate-300 text-slate-950 placeholder:text-slate-500",
+                  "min-h-[76px] w-full resize-none rounded-[12px] border px-3 py-2.5 text-[14px] leading-6 outline-none shadow-none",
+
+                  isDark
+                    ? "border-white/[0.09] bg-[#0b0b0b] text-zinc-100"
+                    : "border-black/[0.10] bg-white text-zinc-900",
                 )}
               />
 
-              <div className="mt-3 flex items-center justify-end gap-2">
+              <div className="mt-3 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setDraft(content);
-                    setIsEditing(false);
-                  }}
+                  disabled={
+                    saving
+                  }
+                  onClick={
+                    cancelEditing
+                  }
                   className={cn(
-                    "ui-button ui-button-secondary h-9 px-3 text-[12px]",
-                    theme === "dark" ? "text-zinc-300" : "text-slate-700",
+                    "inline-flex h-9 items-center gap-2 rounded-[9px] px-3 text-[12px]",
+
+                    isDark
+                      ? "text-zinc-400 hover:bg-white/[0.06] hover:text-white"
+                      : "text-zinc-600 hover:bg-black/[0.05] hover:text-black",
                   )}
                 >
-                  <X size={14} />
+                  <X
+                    size={
+                      14
+                    }
+                  />
+
                   Cancel
                 </button>
+
                 <button
                   type="button"
-                  onClick={() => void handleSave()}
-                  className="ui-button ui-button-primary h-9 px-3 text-[12px]"
+                  disabled={
+                    saving ||
+                    !draft.trim()
+                  }
+                  onClick={() =>
+                    void handleSave()
+                  }
+                  className={cn(
+                    "inline-flex h-9 items-center gap-2 rounded-[9px] px-3 text-[12px] font-medium disabled:opacity-40",
+
+                    isDark
+                      ? "bg-white text-black"
+                      : "bg-black text-white",
+                  )}
                 >
-                  <Check size={14} />
-                  Save & Regenerate
+                  <Check
+                    size={
+                      14
+                    }
+                  />
+
+                  {saving
+                    ? "Saving..."
+                    : "Save & Regenerate"}
                 </button>
               </div>
             </div>
@@ -97,65 +327,114 @@ export default function UserMessage({
             <>
               <div
                 className={cn(
-                  "rounded-[18px] rounded-br-[8px] px-4 py-3 text-[14px] leading-6",
-                  theme === "dark"
-                    ? "bg-white/6 text-white"
-                    : "bg-slate-100 text-slate-950",
+                  "whitespace-pre-wrap break-words rounded-[18px] px-4 py-3 text-[14px] leading-6",
+
+                  isDark
+                    ? "bg-white/[0.08] text-zinc-100"
+                    : "bg-zinc-100 text-zinc-900",
                 )}
               >
                 {content}
               </div>
 
-              <div className="mt-2 flex items-center justify-end gap-1.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
-              <button
-                type="button"
-                title="Copy message"
-                onClick={copyMessage}
-                className={cn(
-                  "rounded-full p-1.5 transition hover:bg-[color:var(--accent-hover)]",
-                  copied
-                    ? "text-green-400"
-                    : theme === "dark"
-                      ? "text-zinc-500 hover:text-white"
-                      : "text-slate-500 hover:text-slate-950",
-                )}
-              >
-                {copied ? <Check size={14} /> : <Copy size={14} />}
-              </button>
-              <button
-                type="button"
-                title="Edit message"
-                onClick={() => {
-                  setDraft(content);
-                  setIsEditing(true);
-                }}
-                className={cn(
-                  "rounded-full p-1.5 transition hover:bg-[color:var(--accent-hover)]",
-                  theme === "dark"
-                    ? "text-zinc-500 hover:text-white"
-                    : "text-slate-500 hover:text-slate-950",
-                )}
-              >
-                <Pencil size={14} />
-              </button>
-              <button
-                type="button"
-                title="Delete message"
-                onClick={onDelete}
-                className={cn(
-                  "rounded-full p-1.5 transition hover:bg-[color:var(--accent-hover)]",
-                  theme === "dark"
-                    ? "text-zinc-500 hover:text-white"
-                    : "text-slate-500 hover:text-slate-950",
-                )}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
+              {/* USER ACTIONS — HOVER ONLY */}
+
+              <div className="mt-1 flex h-8 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100">
+                <UserAction
+                  theme={
+                    theme
+                  }
+                  title={
+                    copied
+                      ? "Copied"
+                      : "Copy"
+                  }
+                  onClick={() =>
+                    void copyMessage()
+                  }
+                >
+                  {copied ? (
+                    <Check
+                      size={
+                        14
+                      }
+                    />
+                  ) : (
+                    <Copy
+                      size={
+                        14
+                      }
+                    />
+                  )}
+                </UserAction>
+
+                <UserAction
+                  theme={
+                    theme
+                  }
+                  title="Edit message"
+                  onClick={
+                    startEditing
+                  }
+                >
+                  <Pencil
+                    size={
+                      14
+                    }
+                  />
+                </UserAction>
+              </div>
             </>
           )}
         </div>
       </div>
     </div>
+  );
+}
+
+/* ======================================================== */
+/* ACTION                                                   */
+/* ======================================================== */
+
+function UserAction({
+  theme,
+  title,
+  onClick,
+  children,
+}: {
+  theme: Theme;
+
+  title: string;
+
+  onClick: () => void;
+
+  children:
+    React.ReactNode;
+}) {
+  const isDark =
+    theme === "dark";
+
+  return (
+    <button
+      type="button"
+      title={
+        title
+      }
+      aria-label={
+        title
+      }
+      onClick={
+        onClick
+      }
+      className={cn(
+        "flex h-8 w-8 items-center justify-center rounded-[8px] transition-colors",
+
+        isDark
+          ? "text-zinc-500 hover:bg-white/[0.07] hover:text-zinc-200"
+          : "text-zinc-400 hover:bg-black/[0.05] hover:text-zinc-900",
+      )}
+    >
+      {children}
+    </button>
   );
 }

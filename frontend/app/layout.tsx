@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 
 import ThemeProvider from "@/components/providers/ThemeProvider";
+import AppShell from "@/components/layout/AppShell";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -19,7 +20,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="bg-background text-foreground antialiased">
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider><AppShell>{children}</AppShell></ThemeProvider>
       </body>
     </html>
   );
