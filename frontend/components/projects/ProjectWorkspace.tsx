@@ -832,6 +832,12 @@ export default function ProjectWorkspace({
                   )
                 }
 
+                onOpenChats={() =>
+                  showPanel(
+                    "chats",
+                  )
+                }
+
                 onOpenTools={
                   onOpenTools
                 }

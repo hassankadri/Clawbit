@@ -9,6 +9,7 @@ import {
   ChevronDown,
   FileText,
   Folder,
+  MessageSquare,
   Mic,
   Paperclip,
   PlugZap,
@@ -155,6 +156,8 @@ interface ProjectCommandBarProps {
 
   onOpenFiles: () => void;
 
+  onOpenChats: () => void;
+
   onOpenTools: () => void;
 
   onFilesUploaded: (
@@ -206,6 +209,8 @@ export default function ProjectCommandBar({
   onChooseProject,
 
   onOpenFiles,
+
+  onOpenChats,
 
   onOpenTools,
 
@@ -1403,6 +1408,29 @@ export default function ProjectCommandBar({
           />
 
           Files
+        </button>
+
+        <button
+          type="button"
+          onClick={
+            onOpenChats
+          }
+          className={cn(
+            "flex h-9 items-center gap-2 rounded-[9px] px-3 text-[12px] transition-colors",
+
+            isDark
+              ? "text-zinc-300 hover:bg-white/[0.06] hover:text-white"
+              : "text-zinc-700 hover:bg-black/[0.05] hover:text-black",
+          )}
+        >
+          <MessageSquare
+            size={
+              15
+            }
+            className="text-zinc-500"
+          />
+
+          Chats
         </button>
 
         {/* =========================================== */}
