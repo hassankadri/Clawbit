@@ -32,7 +32,9 @@ import {
   type ChatMode,
 } from "@/lib/api";
 
-import { MODELS } from "@/lib/models";
+import { MODELS, confirmModelSelection, imageSelectionError } from "@/lib/models";
+import { useModels } from "@/hooks/useModels";
+import ModelChoices from "@/components/layout/ModelChoices";
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -210,14 +212,6 @@ const mimeExtensionMap:
       "webp",
   };
 
-const availableModels =
-  MODELS.filter(
-    (
-      item,
-    ) =>
-      item.available,
-  );
-
 /* ====================================================== */
 /* COMPOSER                                               */
 /* ====================================================== */
@@ -236,6 +230,7 @@ export default function Composer({
   onSend,
   onAttachmentsCommitted,
 }: ComposerProps) {
+  const availableModels = useModels();
   const [
     message,
     setMessage,
@@ -481,7 +476,7 @@ export default function Composer({
         ],
 
       [
-        model,
+        model, availableModels,
       ],
     );
 
@@ -972,6 +967,9 @@ export default function Composer({
           file,
         );
 
+      const imageError = imageSelectionError(selectedModel, file);
+      if (imageError) { window.alert(imageError); continue; }
+
       const uploadFile =
         normalizeUploadFile(
           file,
@@ -1262,6 +1260,12 @@ export default function Composer({
       loading
     ) {
       return;
+    }
+
+    if (!selectedModel.available) { window.alert(selectedModel.reason); return; }
+    if (!confirmModelSelection(selectedModel)) return;
+    if (attachmentsRef.current.some((item) => item.kind === "image") && !selectedModel.capabilities.vision) {
+      window.alert("Choose a vision-capable model for the attached images."); return;
     }
 
     await waitForUploads();
@@ -1769,88 +1773,9 @@ export default function Composer({
                   >
                     {/* MODELS */}
 
-                    <div className="space-y-1">
-                      {availableModels.map(
-                        (
-                          item,
-                        ) => {
-                          const selected =
-                            item.id ===
-                              model &&
-                            chatMode ===
-                              "normal";
-
-                          return (
-                            <button
-                              key={
-                                item.id
-                              }
-
-                              type="button"
-
-                              onClick={() => {
-                                onModelChange(
-                                  item.id,
-                                );
-
-                                changeChatMode(
-                                  "normal",
-                                );
-
-                                setModelOpen(
-                                  false,
-                                );
-                              }}
-
-                              className={cn(
-                                "flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 text-left transition-colors",
-
-                                selected
-                                  ? theme ===
-                                    "dark"
-                                    ? "bg-white/[0.09]"
-                                    : "bg-black/[0.065]"
-                                  : theme ===
-                                    "dark"
-                                    ? "hover:bg-white/[0.055]"
-                                    : "hover:bg-black/[0.045]",
-                              )}
-                            >
-                              <div className="min-w-0 flex-1">
-                                <p
-                                  className={cn(
-                                    "truncate text-[13px] font-medium",
-
-                                    theme === "dark"
-                                      ? "text-zinc-100"
-                                      : "text-zinc-900",
-                                  )}
-                                >
-                                  {
-                                    item.label
-                                  }
-                                </p>
-
-                                <p className="mt-0.5 truncate text-[11px] text-zinc-500">
-                                  {
-                                    item.description
-                                  }
-                                </p>
-                              </div>
-
-                              {selected ? (
-                                <Check
-                                  size={
-                                    16
-                                  }
-                                  className="shrink-0"
-                                />
-                              ) : null}
-                            </button>
-                          );
-                        },
-                      )}
-                    </div>
+                    <ModelChoices models={availableModels} selected={model} onSelect={(id) => {
+                      onModelChange(id); changeChatMode("normal"); setModelOpen(false);
+                    }} />
 
                     {/* SEPARATOR */}
 

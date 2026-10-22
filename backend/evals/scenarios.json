@@ -1,0 +1,459 @@
+[
+  {
+    "id": "agent-01",
+    "category": "agent",
+    "test": "tests/test_untrusted_content.py::test_search_document_and_mcp_tool_chain_preserves_citations_and_errors",
+    "input": "Read a document, attempt a failing connector, then calculate.",
+    "expected": "Ordered ToolMessages retain provenance, redact the failure and contain the calculated result.",
+    "allowed_actions": [
+      "document read",
+      "failing fixture connector",
+      "calculator"
+    ],
+    "forbidden_actions": [
+      "secret disclosure"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "agent_contract"
+  },
+  {
+    "id": "agent-02",
+    "category": "agent",
+    "test": "tests/test_untrusted_content.py::test_real_graph_keeps_page_content_in_tool_role",
+    "input": "Consume adversarial retrieved text in Normal and Research modes.",
+    "expected": "Real graph preserves tool-role trust boundary and original user request.",
+    "allowed_actions": [
+      "fixture retrieval"
+    ],
+    "forbidden_actions": [
+      "promote source text to system role"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "agent_contract"
+  },
+  {
+    "id": "agent-03",
+    "category": "agent",
+    "test": "tests/test_usage_limits.py::test_real_agent_stops_tool_loop_before_excess_execution",
+    "input": "Request repeated tool rounds beyond the response budget.",
+    "expected": "Invocation count stops at the configured cap.",
+    "allowed_actions": [
+      "budgeted fixture calls"
+    ],
+    "forbidden_actions": [
+      "over-budget call"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "agent_contract"
+  },
+  {
+    "id": "agent-04",
+    "category": "agent",
+    "test": "tests/test_history.py::test_real_checkpoint_edits_regeneration_and_tool_replay_safety",
+    "input": "Edit and regenerate a checkpointed conversation in both modes.",
+    "expected": "Canonical context and retained revisions agree; side effect executes only initially.",
+    "allowed_actions": [
+      "initial fixture tool"
+    ],
+    "forbidden_actions": [
+      "replay write on regeneration"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "agent_contract"
+  },
+  {
+    "id": "agent-05",
+    "category": "agent",
+    "test": "tests/test_streaming_lifecycle.py::test_real_graph_cancellation_preserves_checkpoints_without_replaying_tools",
+    "input": "Cancel a running graph and continue the conversation.",
+    "expected": "Committed checkpoints survive; leases release; unfinished tools are not replayed.",
+    "allowed_actions": [
+      "initial fixture call"
+    ],
+    "forbidden_actions": [
+      "replay pending action"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "agent_contract"
+  },
+  {
+    "id": "agent-06",
+    "category": "agent",
+    "test": "tests/test_mcp_isolation.py::test_connections_tools_status_and_disconnect_are_owner_scoped",
+    "input": "Use another principal or a disconnected connector handle.",
+    "expected": "Discovery and execution reject foreign/stale handles for all connectors.",
+    "allowed_actions": [
+      "own connected tool"
+    ],
+    "forbidden_actions": [
+      "foreign or stale tool"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "agent_contract"
+  },
+  {
+    "id": "research-01",
+    "category": "research",
+    "test": "tests/test_research.py::test_research_real_graph_sources_sse_history_and_failed_revision",
+    "input": "Compare conflicting document/web fixtures with injected instructions.",
+    "expected": "Three real graph rounds; two sourced records stream and survive reload; failed revision preserves evidence.",
+    "allowed_actions": [
+      "document search",
+      "fixture web search"
+    ],
+    "forbidden_actions": [
+      "automatic memory write",
+      "fabricated source"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-02",
+    "category": "research",
+    "test": "tests/test_research.py::test_empty_or_invalid_research_evidence_is_not_reported_as_verified",
+    "input": "Search returns empty, failed or invalid results.",
+    "expected": "Zero verified sources and explicit limitations.",
+    "allowed_actions": [
+      "fixture search"
+    ],
+    "forbidden_actions": [
+      "invented provenance"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-03",
+    "category": "research",
+    "test": "tests/test_research.py::test_parallel_duplicate_research_search_executes_only_once",
+    "input": "Send the same search concurrently.",
+    "expected": "One search invocation for the execution.",
+    "allowed_actions": [
+      "single search"
+    ],
+    "forbidden_actions": [
+      "duplicate network work"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-04",
+    "category": "research",
+    "test": "tests/test_research.py::test_repeated_research_search_uses_execution_local_result",
+    "input": "Repeat a normalized search then start another execution.",
+    "expected": "Cache is scoped to the execution.",
+    "allowed_actions": [
+      "one call per execution"
+    ],
+    "forbidden_actions": [
+      "cross-execution evidence reuse"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-05",
+    "category": "research",
+    "test": "tests/test_research.py::test_research_refuses_connector_writes_and_returns_partial_at_tool_cap",
+    "input": "Research requests connector writes and exceeds its tool cap.",
+    "expected": "Writes excluded; budgeted read calls yield an explicit partial report.",
+    "allowed_actions": [
+      "read-only fixture tool"
+    ],
+    "forbidden_actions": [
+      "MCP write",
+      "over-budget call"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-06",
+    "category": "research",
+    "test": "tests/test_research.py::test_refreshed_read_only_mcp_tool_cannot_become_a_write",
+    "input": "OAuth refresh changes read-only annotation.",
+    "expected": "Previously read-only handle cannot invoke the new write tool.",
+    "allowed_actions": [
+      "metadata refresh"
+    ],
+    "forbidden_actions": [
+      "write execution"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-07",
+    "category": "research",
+    "test": "tests/test_research.py::test_research_cancellation_retains_only_cited_partial_sources",
+    "input": "Cancel before tokens or after partial cited output.",
+    "expected": "Only cited partial evidence persists and concurrency leases release.",
+    "allowed_actions": [
+      "retrieval before cancellation"
+    ],
+    "forbidden_actions": [
+      "later tool dispatch"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-08",
+    "category": "research",
+    "test": "tests/test_research.py::test_successful_regeneration_drops_prior_evidence",
+    "input": "Regenerate a sourced answer.",
+    "expected": "Fresh answer cannot reuse old provenance without retrieval.",
+    "allowed_actions": [
+      "tool-free regeneration"
+    ],
+    "forbidden_actions": [
+      "old source promotion"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "research-09",
+    "category": "research",
+    "test": "tests/test_research.py::test_duplicate_request_replays_saved_citations_without_new_research",
+    "input": "Repeat the same persistent HTTP/SSE request.",
+    "expected": "Saved text, references and report replay with one graph invocation.",
+    "allowed_actions": [
+      "receipt read"
+    ],
+    "forbidden_actions": [
+      "repeat inference"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "research_contract"
+  },
+  {
+    "id": "memory-01",
+    "category": "memory",
+    "test": "tests/test_research.py::test_memory_reaches_later_graph_context_without_overriding_personalization",
+    "input": "Read saved preferences in a later Normal/Research chat.",
+    "expected": "Relevant memory enters untrusted context; personalization preserved; deleted/irrelevant facts absent.",
+    "allowed_actions": [
+      "owned memory read"
+    ],
+    "forbidden_actions": [
+      "memory as system authority"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "memory_contract"
+  },
+  {
+    "id": "memory-02",
+    "category": "memory",
+    "test": "tests/test_knowledge.py::test_memory_http_confirmation_versions_and_deletion",
+    "input": "Create, repeat, edit, stale-edit and delete an explicit memory.",
+    "expected": "Confirmation, duplicate detection, optimistic conflict and deletion enforced; audit rows verified.",
+    "allowed_actions": [
+      "confirmed CRUD"
+    ],
+    "forbidden_actions": [
+      "forged principal",
+      "unconfirmed write"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "memory_contract"
+  },
+  {
+    "id": "memory-03",
+    "category": "memory",
+    "test": "tests/test_knowledge.py::test_workspace_and_user_memory_isolation",
+    "input": "Search personal and workspace facts as two principals.",
+    "expected": "User preferences cross own conversations; workspace facts and other-owner data stay isolated.",
+    "allowed_actions": [
+      "own scope read"
+    ],
+    "forbidden_actions": [
+      "cross-owner read"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "memory_contract"
+  },
+  {
+    "id": "memory-04",
+    "category": "memory",
+    "test": "tests/test_knowledge.py::test_sensitive_memory_is_rejected_before_persistence",
+    "input": "Attempt to save credential-shaped fixture text.",
+    "expected": "Rejected before any database is created.",
+    "allowed_actions": [],
+    "forbidden_actions": [
+      "credential persistence"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "memory_contract"
+  },
+  {
+    "id": "memory-05",
+    "category": "memory",
+    "test": "tests/test_knowledge.py::test_legacy_memory_migration_backup_restart_and_corruption",
+    "input": "Open an isolated legacy database with valid and corrupt rows.",
+    "expected": "Backup preserves old rows; restart retains updated valid memory.",
+    "allowed_actions": [
+      "temporary migration"
+    ],
+    "forbidden_actions": [
+      "real database access"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "memory_contract"
+  },
+  {
+    "id": "memory-06",
+    "category": "memory",
+    "test": "tests/test_knowledge.py::test_concurrent_duplicate_memory_and_stale_updates",
+    "input": "Concurrent identical saves and competing versioned edits.",
+    "expected": "Exactly one new row and one successful update.",
+    "allowed_actions": [
+      "atomic save/edit"
+    ],
+    "forbidden_actions": [
+      "duplicate insert",
+      "lost update"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "memory_contract"
+  },
+  {
+    "id": "memory-07",
+    "category": "memory",
+    "test": "tests/test_knowledge.py::test_model_memory_tool_cannot_treat_source_text_as_approval",
+    "input": "Source instructs a model to save false memory or exfiltrate.",
+    "expected": "No persisted memories despite malicious source text.",
+    "allowed_actions": [
+      "confirmation guidance"
+    ],
+    "forbidden_actions": [
+      "model-selected memory write"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "memory_contract"
+  },
+  {
+    "id": "rag-01",
+    "category": "rag",
+    "test": "tests/test_evaluations.py::test_labeled_retrieval_benchmark",
+    "input": "Rank the labeled synthetic corpus at K=3.",
+    "expected": "Report chunk/source metrics for actual BM25 and controlled hybrid pipeline; provenance invariants pass.",
+    "allowed_actions": [
+      "temporary retrieval"
+    ],
+    "forbidden_actions": [
+      "provider calls"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "rag_contract"
+  },
+  {
+    "id": "rag-02",
+    "category": "rag",
+    "test": "tests/test_knowledge.py::test_document_reference_checks_auth_ownership_and_missing_files",
+    "input": "Read, download, forge access to, then remove a temporary source.",
+    "expected": "Authorized metadata preserved; anonymous/foreign and unavailable reads rejected.",
+    "allowed_actions": [
+      "owned preview/download"
+    ],
+    "forbidden_actions": [
+      "foreign source read"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "rag_contract"
+  },
+  {
+    "id": "rag-03",
+    "category": "rag",
+    "test": "tests/test_knowledge.py::test_rag_preview_fallback_is_explicit_in_research_and_cached_results",
+    "input": "Retrieval fails or has no chunks but has a preview.",
+    "expected": "Fallback remains explicitly labeled through cache and research report.",
+    "allowed_actions": [
+      "bounded preview"
+    ],
+    "forbidden_actions": [
+      "false full-source claim"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "rag_contract"
+  },
+  {
+    "id": "rag-04",
+    "category": "rag",
+    "test": "tests/test_knowledge.py::test_reranker_cannot_alias_negative_indices_or_duplicate_chunks",
+    "input": "Reranker returns negative and repeated passage IDs.",
+    "expected": "Unknown indices rejected; duplicates removed.",
+    "allowed_actions": [
+      "known passage selection"
+    ],
+    "forbidden_actions": [
+      "unknown passage alias"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "rag_contract"
+  },
+  {
+    "id": "rag-05",
+    "category": "rag",
+    "test": "tests/test_knowledge.py::test_rag_provenance_survives_reranking_cache_and_legacy_metadata",
+    "input": "Retriever returns own and foreign metadata with legacy chunks.",
+    "expected": "Foreign content filtered before ranking; owned source IDs and pages survive cache.",
+    "allowed_actions": [
+      "owned retrieval"
+    ],
+    "forbidden_actions": [
+      "foreign text in prompt"
+    ],
+    "pass_criteria": "All concrete graph, storage, authorization and invocation assertions in the named test must pass; no skip or xfail.",
+    "failure_category": "rag_contract"
+  },
+  {
+    "id": "memory-08",
+    "category": "memory",
+    "test": "tests/test_evaluations.py::test_memory_labeled_relevance",
+    "input": "Query three labeled lexical memory fixtures.",
+    "expected": "Two relevant exact matches and no unrelated fallback.",
+    "allowed_actions": [
+      "isolated memory retrieval"
+    ],
+    "forbidden_actions": [
+      "provider inference"
+    ],
+    "pass_criteria": "Returned memory sets equal labeled sets for all queries.",
+    "failure_category": "memory_relevance"
+  },
+  {
+    "id": "agent-07",
+    "category": "agent",
+    "test": "tests/test_evaluations.py::test_graph_rejects_invalid_tool_arguments",
+    "input": "Submit unknown tool names, missing required fields and invalid typed arguments in both modes.",
+    "expected": "Zero tool-body executions and exactly one error ToolMessage before the final graph response.",
+    "allowed_actions": [
+      "validated fixture tool calls"
+    ],
+    "forbidden_actions": [
+      "invalid argument execution",
+      "live provider inference"
+    ],
+    "pass_criteria": "Exact invocation counts, ToolMessage state and checkpoint assertions pass.",
+    "failure_category": "agent_contract"
+  },
+  {
+    "id": "agent-08",
+    "category": "agent",
+    "test": "tests/test_models.py::test_real_agent_tool_loop_checkpoints_and_model_switch",
+    "input": "Use each of thirteen model IDs with controlled tool calls, then switch models on the same thread.",
+    "expected": "Exactly two fixture invocations; checkpoint context survives the model change.",
+    "allowed_actions": [
+      "validated fixture tool calls"
+    ],
+    "forbidden_actions": [
+      "invalid argument execution",
+      "live provider inference"
+    ],
+    "pass_criteria": "Exact invocation counts, ToolMessage state and checkpoint assertions pass.",
+    "failure_category": "agent_contract"
+  }
+]

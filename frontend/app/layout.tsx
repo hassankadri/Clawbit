@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 
 import ThemeProvider from "@/components/providers/ThemeProvider";
 import AppShell from "@/components/layout/AppShell";
+import AuthProvider from "@/components/auth/AuthProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -20,7 +21,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="bg-background text-foreground antialiased">
-        <ThemeProvider><AppShell>{children}</AppShell></ThemeProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <AppShell>{children}</AppShell>
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

@@ -7,8 +7,13 @@ import {
 } from "react";
 
 import {
+  ChatStreamError,
   streamChat,
+  getActiveChatMode,
+  setActiveChatMode,
+  type ChatMode,
 } from "@/lib/api";
+import { createHistory, loadHistory, historySnapshot, removeHistoryMessage } from "@/lib/history";
 
 import {
   DEFAULT_MODEL_ID,
@@ -19,7 +24,13 @@ import {
 /* TYPES                                                  */
 /* ====================================================== */
 
+import type { SourceReference, ResearchReport } from "@/lib/knowledge";
+
 export interface Message {
+  createdAt?: number;
+  attachmentIds?: string[];
+  sources?: SourceReference[];
+  research?: ResearchReport;
   id: string;
 
   role:
@@ -31,11 +42,20 @@ export interface Message {
   status?:
     | "complete"
     | "streaming"
-    | "error";
+    | "error"
+    | "cancelled";
+
+  error?: string;
+  errorStatus?: number;
 }
 
 
 export interface ChatSnapshot {
+  mode?: ChatMode;
+  historyVersion?: number;
+  workspaceId?: string;
+  conversationId?: string;
+  serverPersisted?: boolean;
   messages:
     Message[];
 
@@ -48,6 +68,8 @@ export interface ChatSnapshot {
 
 
 interface ActiveStream {
+  flush: () => void;
+  timer?: ReturnType<typeof setTimeout>;
   assistantMessageId:
     string;
 
@@ -60,7 +82,13 @@ interface ActiveStream {
 /* HOOK                                                   */
 /* ====================================================== */
 
-export default function useChat() {
+export default function useChat(options: { persistent?: boolean } = {}) {
+  const persistent = options.persistent ?? false;
+  const historyRef = useRef<ChatSnapshot | null>(null);
+  const selectionRef = useRef(0);
+  const loadRef = useRef<AbortController | null>(null);
+  const [historyError, setHistoryError] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [
     messages,
     setMessages,
@@ -200,447 +228,172 @@ export default function useChat() {
   /* ==================================================== */
 
   function stopGeneration() {
-    const activeStream =
-      streamRef.current;
-
-    if (
-      !activeStream
-    ) {
-      setLoading(
-        false,
-      );
-
-      return;
-    }
-
-
-    /*
-     * Abort the active fetch request.
-     */
-    activeStream.controller.abort();
-
-
-    /*
-     * Keep whatever text was already streamed.
-     */
-    updateMessage(
-      activeStream.assistantMessageId,
-
-      (
-        message,
-      ) => ({
-        ...message,
-
-        content:
-          message.content
-            .trim()
-            .length >
-          0
-            ? message.content
-            : "Generation stopped.",
-
-        status:
-          "complete",
-      }),
-    );
-
-
-    streamRef.current =
-      null;
-
-    setLoading(
-      false,
-    );
+    const active = streamRef.current;
+    if (!active) return;
+    active.flush();
+    streamRef.current = null;
+    active.controller.abort();
+    updateMessage(active.assistantMessageId, (message) => ({
+      ...message,
+      status: "cancelled",
+    }));
+    setLoading(false);
+    if (persistent) setHistoryLoading(true);
   }
 
-
-  /* ==================================================== */
-  /* REQUEST ASSISTANT TURN                               */
-  /* ==================================================== */
+  useEffect(() => () => {
+    selectionRef.current += 1;
+    loadRef.current?.abort();
+    const active = streamRef.current;
+    streamRef.current = null;
+    if (active) {
+      clearTimeout(active.timer);
+      active.controller.abort();
+    }
+  }, []);
 
   async function requestAssistantTurn(
-    promptText:
-      string,
-
-    attachmentIds:
-      string[],
-
-    assistantMessageId:
-      string,
+    promptText: string,
+    attachmentIds: string[],
+    assistantMessageId: string,
+    turn?: {
+      userMessageId: string;
+      operation: "send" | "edit" | "retry" | "regenerate";
+      targetMessageId?: string;
+      conversationId?: string;
+      workspaceId?: string;
+      hasLegacyHistory?: boolean;
+    },
   ) {
-    const controller =
-      new AbortController();
+    const controller = new AbortController();
+    let pendingText = "";
+    let terminal = false;
+    const active: ActiveStream = { assistantMessageId, controller, flush };
+    streamRef.current = active;
+    const isCurrent = () => streamRef.current === active && !controller.signal.aborted;
+    const selection = selectionRef.current;
+    setHistoryError("");
 
+    function flush() {
+      clearTimeout(active.timer);
+      active.timer = undefined;
+      const text = pendingText;
+      pendingText = "";
+      if (text && isCurrent()) {
+        updateMessage(assistantMessageId, (message) => ({
+          ...message, content: message.content + text, status: "streaming",
+        }));
+      }
+    }
 
-    const activeStream: ActiveStream =
-      {
-        assistantMessageId,
-
-        controller,
-      };
-
-
-    streamRef.current =
-      activeStream;
-
-
-    let streamFinished =
-      false;
-
-    let streamFailed =
-      false;
-
-    let receivedContent =
-      false;
-
+    function fail(message: string, status?: number) {
+      if (!isCurrent()) return;
+      terminal = true;
+      flush();
+      updateMessage(assistantMessageId, (current) => ({
+        ...current, status: "error", error: message, errorStatus: status,
+      }));
+    }
 
     try {
-      await streamChat(
-        {
-          message:
-            promptText,
-
-          thread_id:
-            threadId ||
-            undefined,
-
-          model,
-
-          attachment_ids:
-            attachmentIds,
-        },
-
-        {
-          /* ============================================ */
-          /* STREAM START                                 */
-          /* ============================================ */
-
-          onStart: (
-            event,
-          ) => {
-            if (
-              controller
-                .signal
-                .aborted
-            ) {
-              return;
-            }
-
-
-            if (
-              event.thread_id &&
-              event.thread_id !==
-                threadId
-            ) {
-              setThreadId(
-                event.thread_id,
-              );
-            }
-          },
-
-
-          /* ============================================ */
-          /* REAL TOKEN STREAM                            */
-          /* ============================================ */
-
-          onToken: (
-            text,
-          ) => {
-            if (
-              controller
-                .signal
-                .aborted
-            ) {
-              return;
-            }
-
-
-            if (
-              !text
-            ) {
-              return;
-            }
-
-
-            receivedContent =
-              true;
-
-
-            updateMessage(
-              assistantMessageId,
-
-              (
-                message,
-              ) => ({
-                ...message,
-
-                content:
-                  message.content +
-                  text,
-
-                status:
-                  "streaming",
-              }),
-            );
-          },
-
-
-          /* ============================================ */
-          /* STREAM COMPLETE                              */
-          /* ============================================ */
-
-          onDone: (
-            event,
-          ) => {
-            if (
-              controller
-                .signal
-                .aborted
-            ) {
-              return;
-            }
-
-
-            streamFinished =
-              true;
-
-
-            if (
-              event.thread_id &&
-              event.thread_id !==
-                threadId
-            ) {
-              setThreadId(
-                event.thread_id,
-              );
-            }
-
-
-            updateMessage(
-              assistantMessageId,
-
-              (
-                message,
-              ) => ({
-                ...message,
-
-                content:
-                  message.content
-                    .trim()
-                    .length >
-                  0
-                    ? message.content
-                    : "I couldn't generate a response. Please try again.",
-
-                status:
-                  message.content
-                    .trim()
-                    .length >
-                  0
-                    ? "complete"
-                    : "error",
-              }),
-            );
-
-
-            if (
-              streamRef
-                .current
-                ?.assistantMessageId ===
-              assistantMessageId
-            ) {
-              streamRef.current =
-                null;
-            }
-
-
-            setLoading(
-              false,
-            );
-          },
-
-
-          /* ============================================ */
-          /* BACKEND SSE ERROR                            */
-          /* ============================================ */
-
-          onError: (
-            event,
-          ) => {
-            if (
-              controller
-                .signal
-                .aborted
-            ) {
-              return;
-            }
-
-
-            streamFailed =
-              true;
-
-
-            const errorMessage =
-              event.message
-                ?.trim() ||
-              "I couldn't generate a response right now. Please try again.";
-
-
-            updateMessage(
-              assistantMessageId,
-
-              (
-                message,
-              ) => ({
-                ...message,
-
-                content:
-                  errorMessage,
-
-                status:
-                  "error",
-              }),
-            );
-
-
-            if (
-              streamRef
-                .current
-                ?.assistantMessageId ===
-              assistantMessageId
-            ) {
-              streamRef.current =
-                null;
-            }
-
-
-            setLoading(
-              false,
-            );
-          },
-        },
-
-        controller.signal,
-      );
-
-
-      /*
-       * If the connection ended without receiving either
-       * "done" or "error", treat it as an interrupted stream.
-       */
-      if (
-        !controller
-          .signal
-          .aborted &&
-        !streamFinished &&
-        !streamFailed
-      ) {
-        if (
-          receivedContent
-        ) {
-          updateMessage(
-            assistantMessageId,
-
-            (
-              message,
-            ) => ({
-              ...message,
-
-              status:
-                "complete",
-            }),
-          );
-
-          streamFinished =
-            true;
-        } else {
-          updateMessage(
-            assistantMessageId,
-
-            (
-              message,
-            ) => ({
-              ...message,
-
-              content:
-                "The response stream ended unexpectedly. Please try again.",
-
-              status:
-                "error",
-            }),
-          );
-
-          streamFailed =
-            true;
+      if (persistent && turn) {
+        if (!historyRef.current?.serverPersisted) {
+          if (turn.hasLegacyHistory) {
+            throw new Error("Import this browser conversation before continuing, editing or retrying it.");
+          }
+          const saved = await createHistory({
+            id: turn.conversationId ?? threadId, thread_id: threadId,
+            workspace_id: turn.workspaceId ?? threadId, model, mode: getActiveChatMode(),
+            title: promptText.trim().slice(0, 80) || "New Chat",
+          }, controller.signal);
+          if (!isCurrent()) return;
+          historyRef.current = historySnapshot(saved);
         }
       }
-    } catch (
-      error
-    ) {
-      /*
-       * Abort is expected when the user presses Stop.
-       */
-      if (
-        controller
-          .signal
-          .aborted
-      ) {
-        return;
-      }
-
-
-      streamFailed =
-        true;
-
-
-      const errorMessage =
-        error instanceof
-        Error
-          ? error.message
-          : "I couldn't generate a response right now. Please try again.";
-
-
-      updateMessage(
-        assistantMessageId,
-
-        (
-          message,
-        ) => ({
-          ...message,
-
-          content:
-            errorMessage,
-
-          status:
-            "error",
-        }),
-      );
-
-
-      console.error(
-        error,
-      );
-    } finally {
-      if (
-        streamRef
-          .current
-          ?.assistantMessageId ===
-        assistantMessageId
-      ) {
-        streamRef.current =
-          null;
-      }
-
-
-      if (
-        !controller
-          .signal
-          .aborted
-      ) {
-        setLoading(
-          false,
+      await streamChat({
+        message: promptText,
+        thread_id: threadId || undefined,
+        model,
+        attachment_ids: attachmentIds,
+        ...(persistent && turn ? {
+          request_id: crypto.randomUUID(), user_message_id: turn.userMessageId,
+          assistant_message_id: assistantMessageId,
+          expected_version: historyRef.current?.historyVersion,
+          workspace_id: historyRef.current?.workspaceId,
+          operation: turn.operation, target_message_id: turn.targetMessageId,
+        } : {}),
+      }, {
+        onStart: (event) => {
+          if (isCurrent() && event.thread_id !== threadId) setThreadId(event.thread_id);
+        },
+        onSources: (sources) => {
+          if (isCurrent() && !terminal) updateMessage(assistantMessageId, (message) => ({ ...message, sources }));
+        },
+        onToken: (text) => {
+          if (!isCurrent() || !text || terminal) return;
+          pendingText += text;
+          // Coalesce deltas for one message update per frame-sized interval.
+          if (active.timer === undefined) active.timer = setTimeout(flush, 32);
+        },
+        onDone: (event) => {
+          if (!isCurrent() || terminal) return;
+          terminal = true;
+          flush();
+          if (event.thread_id !== threadId) setThreadId(event.thread_id);
+          updateMessage(assistantMessageId, (message) => ({
+            ...message,
+            sources: event.inspector?.sources ?? [],
+            research: event.inspector?.research,
+            status: message.content.trim() ? "complete" : "error",
+            error: message.content.trim() ? undefined : "The provider returned no answer text.",
+          }));
+        },
+        onError: (event) => fail(event.message, event.status_code),
+      }, controller.signal);
+      if (!terminal) fail("The response stream ended unexpectedly. Please retry.");
+    } catch (error) {
+      if (!isCurrent()) return;
+      if (error instanceof Error && error.name === "AbortError") {
+        flush();
+        updateMessage(assistantMessageId, (message) => ({ ...message, status: "cancelled" }));
+      } else {
+        fail(
+          error instanceof Error ? error.message : "The response failed. Please retry.",
+          error instanceof ChatStreamError ? error.status_code : undefined,
         );
       }
+    } finally {
+      clearTimeout(active.timer);
+      if (persistent && historyRef.current?.serverPersisted && selectionRef.current === selection
+          && (streamRef.current === active || streamRef.current === null)) {
+        try {
+          let saved = await loadHistory(threadId);
+          for (let attempt = 0; saved.running && attempt < 10; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            if (selectionRef.current !== selection || (streamRef.current !== active && streamRef.current !== null)) return;
+            saved = await loadHistory(threadId);
+          }
+          if (selectionRef.current === selection && (streamRef.current === active || streamRef.current === null)) {
+            historyRef.current = historySnapshot(saved);
+            if (turn?.operation === "send" && !saved.messages?.some((message) => message.id === assistantMessageId)) {
+              setHistoryError("This attempt was not saved. Your text remains here; copy it before reloading history.");
+            } else {
+              replaceMessages(saved.messages ?? []);
+            }
+            if (turn?.operation !== "send" && saved.messages?.at(-1)?.id !== assistantMessageId) {
+              setHistoryError("The new revision did not complete. The previous conversation is preserved.");
+            }
+            window.dispatchEvent(new Event("clawbit-history-updated"));
+          }
+        } catch {
+          if (selectionRef.current === selection) setHistoryError("Could not refresh saved history. Reload before sending again.");
+        }
+      }
+      if (streamRef.current === active) {
+        streamRef.current = null;
+        setLoading(false);
+      }
+      if (selectionRef.current === selection && streamRef.current === null) setHistoryLoading(false);
     }
   }
 
@@ -655,6 +408,7 @@ export default function useChat() {
 
     attachmentIds:
       string[] = [],
+    context: { conversationId?: string; workspaceId?: string } = {},
   ) {
     const normalizedText =
       text.trim();
@@ -670,7 +424,7 @@ export default function useChat() {
 
 
     if (
-      loading ||
+      loading || historyLoading ||
       streamRef.current
     ) {
       return;
@@ -679,6 +433,8 @@ export default function useChat() {
 
     const userMessage: Message =
       {
+        createdAt: Date.now(),
+        attachmentIds,
         id:
           crypto.randomUUID(),
 
@@ -709,6 +465,7 @@ export default function useChat() {
       };
 
 
+    const hasLegacyHistory = messagesRef.current.length > 0 && !historyRef.current?.serverPersisted;
     updateMessages(
       (
         current,
@@ -733,6 +490,7 @@ export default function useChat() {
       attachmentIds,
 
       assistantMessage.id,
+      { userMessageId: userMessage.id, operation: "send", hasLegacyHistory, ...context },
     );
   }
 
@@ -743,6 +501,11 @@ export default function useChat() {
 
   function clearChat() {
     stopGeneration();
+    selectionRef.current += 1;
+    loadRef.current?.abort();
+    historyRef.current = null;
+    setHistoryError("");
+    setHistoryLoading(false);
 
 
     replaceMessages(
@@ -763,6 +526,8 @@ export default function useChat() {
   function createSnapshot():
     ChatSnapshot {
     return {
+      ...historyRef.current,
+      mode: getActiveChatMode(),
       messages:
         messagesRef.current,
 
@@ -778,10 +543,17 @@ export default function useChat() {
       ChatSnapshot,
   ) {
     stopGeneration();
+    selectionRef.current += 1;
+    loadRef.current?.abort();
+    historyRef.current = snapshot;
+    setHistoryError("");
+    setHistoryLoading(false);
 
 
     replaceMessages(
-      snapshot.messages,
+      snapshot.messages.map((message) => message.status === "streaming"
+        ? { ...message, status: "cancelled" as const }
+        : message),
     );
 
 
@@ -793,6 +565,26 @@ export default function useChat() {
     setModel(
       snapshot.model,
     );
+    if (snapshot.mode) setActiveChatMode(snapshot.mode);
+    if (persistent && snapshot.serverPersisted) {
+      const selection = selectionRef.current;
+      const controller = new AbortController();
+      loadRef.current = controller;
+      setHistoryLoading(true);
+      void loadHistory(snapshot.threadId, controller.signal).then((saved) => {
+        if (selection !== selectionRef.current) return;
+        historyRef.current = historySnapshot(saved);
+        replaceMessages(saved.messages ?? []);
+        setModel(saved.model);
+        setActiveChatMode(saved.mode);
+      }).catch((error: unknown) => {
+        if (selection === selectionRef.current && !controller.signal.aborted) {
+          setHistoryError(error instanceof Error ? error.message : "Could not load saved history.");
+        }
+      }).finally(() => {
+        if (selection === selectionRef.current) setHistoryLoading(false);
+      });
+    }
   }
 
 
@@ -804,6 +596,25 @@ export default function useChat() {
     messageId:
       string,
   ) {
+    if (persistent) {
+      if (loading || historyLoading) return;
+      const saved = historyRef.current;
+      if (saved?.historyVersion === undefined) {
+        setHistoryError("Import this browser conversation before changing saved history.");
+        return;
+      }
+      if (!window.confirm("Remove this message and all following messages from the current conversation? The earlier revision will remain saved.")) return;
+      const selection = selectionRef.current;
+      void removeHistoryMessage(threadId, messageId, saved.historyVersion).then((record) => {
+        if (selection !== selectionRef.current) return;
+        historyRef.current = historySnapshot(record);
+        replaceMessages(record.messages ?? []);
+        window.dispatchEvent(new Event("clawbit-history-updated"));
+      }).catch((error: unknown) => {
+        if (selection === selectionRef.current) setHistoryError(error instanceof Error ? error.message : "Could not remove the message.");
+      });
+      return;
+    }
     if (
       streamRef
         .current
@@ -838,7 +649,7 @@ export default function useChat() {
       string,
   ) {
     if (
-      loading ||
+      loading || historyLoading ||
       streamRef.current
     ) {
       return;
@@ -922,9 +733,14 @@ export default function useChat() {
     await requestAssistantTurn(
       promptMessage.content,
 
-      [],
+      promptMessage.attachmentIds ?? [],
 
       assistantMessage.id,
+      {
+        userMessageId: promptMessage.id,
+        operation: currentMessages[messageIndex].status === "complete" ? "regenerate" : "retry",
+        targetMessageId: messageId, hasLegacyHistory: !historyRef.current?.serverPersisted,
+      },
     );
   }
 
@@ -941,7 +757,7 @@ export default function useChat() {
       string,
   ) {
     if (
-      loading ||
+      loading || historyLoading ||
       streamRef.current
     ) {
       return;
@@ -1057,9 +873,11 @@ export default function useChat() {
     await requestAssistantTurn(
       content,
 
-      [],
+      targetMessage.attachmentIds ?? [],
 
       assistantMessage.id,
+      { userMessageId: targetMessage.id, operation: "edit", targetMessageId: messageId,
+        hasLegacyHistory: !historyRef.current?.serverPersisted },
     );
   }
 
@@ -1069,6 +887,8 @@ export default function useChat() {
   /* ==================================================== */
 
   return {
+    historyError,
+    historyLoading,
     messages,
 
     loading,

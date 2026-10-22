@@ -8,8 +8,10 @@ def _doc(
     attachment_id: str,
     source: str,
     page: int | None = None,
+    thread_id: str = "rag-test-thread",
 ) -> Document:
     metadata = {
+        "thread_id": thread_id,
         "attachment_id": attachment_id,
         "source": source,
     }
@@ -147,6 +149,7 @@ def test_rag_cache_hits_on_second_identical_request(monkeypatch):
             "Project Cache uses SQLite.",
             attachment_id,
             "cache.txt",
+            thread_id="cache-thread",
         )
     ]
 
@@ -235,6 +238,7 @@ def test_rag_cache_does_not_cross_attachment_selection(monkeypatch):
                 f"Content for {attachment_filter}.",
                 attachment_filter,
                 f"{attachment_filter}.txt",
+                thread_id="same-thread",
             )
         ]
 

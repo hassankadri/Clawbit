@@ -1,975 +1,349 @@
+"""Memory-only OAuth credentials bound to principal, session and connection epoch."""
+
 import asyncio
 import base64
+from collections.abc import Callable
 import hashlib
 import json
+import math
 import os
 import secrets
+from threading import Lock, RLock
 import time
-
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-
-# =========================================================
-# CONFIG
-# =========================================================
+from ownership import current_owner, require_active_owner
+from usage_limits import limited
+import usage_limits
 
 STATE_TTL_SECONDS = 600
-
 TOKEN_EXPIRY_SKEW_SECONDS = 60
-
-
-GOOGLE_AUTH_URL = (
-    "https://accounts.google.com/o/oauth2/v2/auth"
-)
-
-GOOGLE_TOKEN_URL = (
-    "https://oauth2.googleapis.com/token"
-)
-
-
-SLACK_AUTH_URL = (
-    "https://slack.com/oauth/v2_user/authorize"
-)
-
-SLACK_TOKEN_URL = (
-    "https://slack.com/api/oauth.v2.user.access"
-)
-
-
-# =========================================================
-# GOOGLE DRIVE SCOPE
-# =========================================================
+GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+SLACK_AUTH_URL = "https://slack.com/oauth/v2_user/authorize"
+SLACK_TOKEN_URL = "https://slack.com/api/oauth.v2.user.access"
+OAUTH_ERROR = "Connector credentials expired or authorization failed. Reconnect and try again."
 
 GOOGLE_DRIVE_SCOPES = [
     "https://www.googleapis.com/auth/drive.readonly",
     "https://www.googleapis.com/auth/drive.file",
 ]
-
-
-# =========================================================
-# SLACK MCP SCOPES
-# =========================================================
-
 SLACK_SCOPES = [
-    "search:read.public",
-    "search:read.private",
-    "search:read.mpim",
-    "search:read.im",
-    "search:read.files",
-    "files:read",
-    "files:write",
-    "emoji:read",
-    "search:read.users",
-    "chat:write",
-    "channels:history",
-    "groups:history",
-    "mpim:history",
-    "im:history",
-    "channels:read",
-    "groups:read",
-    "im:read",
-    "mpim:read",
-    "reactions:read",
-    "reactions:write",
-    "users:read",
-    "users:read.email",
+    "search:read.public", "search:read.private", "search:read.mpim", "search:read.im",
+    "search:read.files", "files:read", "files:write", "emoji:read", "search:read.users",
+    "chat:write", "channels:history", "groups:history", "mpim:history", "im:history",
+    "channels:read", "groups:read", "im:read", "mpim:read", "reactions:read",
+    "reactions:write", "users:read", "users:read.email",
 ]
 
-
-# =========================================================
-# IN-MEMORY STORAGE
-# =========================================================
-
-_oauth_states: dict[
-    str,
-    dict,
-] = {}
+_oauth_states: dict[str, dict] = {}
+_oauth_tokens: dict[tuple[str, str], dict] = {}
+_oauth_versions: dict[tuple[str, str], int] = {}
+_refresh_locks: dict[tuple[str, str], Lock] = {}
+_store_lock = RLock()
 
 
-_oauth_tokens: dict[
-    str,
-    dict,
-] = {}
+class _NoRedirects(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, new_url):
+        raise RuntimeError(OAUTH_ERROR)
 
 
-# =========================================================
-# URL HELPERS
-# =========================================================
+def _key(provider: str) -> tuple[str, str]:
+    return require_active_owner(), provider
 
-def _backend_url() -> str:
-    return (
-        os.getenv(
-            "CLAWBIT_PUBLIC_BACKEND_URL",
-            "http://127.0.0.1:8000",
-        )
-        .strip()
-        .rstrip("/")
-    )
+
+def _backend_url(request_origin: str | None = None) -> str:
+    default = request_origin or "http://127.0.0.1:8000"
+    return os.getenv("CLAWBIT_PUBLIC_BACKEND_URL", default).strip().rstrip("/")
 
 
 def _frontend_url() -> str:
-    return (
-        os.getenv(
-            "CLAWBIT_FRONTEND_URL",
-            "http://localhost:3000",
-        )
-        .strip()
-        .rstrip("/")
-    )
+    return os.getenv("CLAWBIT_FRONTEND_URL", "http://localhost:3000").strip().rstrip("/")
 
 
 def get_frontend_url() -> str:
     return _frontend_url()
 
 
-def _google_redirect_uri() -> str:
-    return (
-        f"{_backend_url()}"
-        "/mcp/oauth/google-drive/callback"
-    )
-
-
-def _slack_redirect_uri() -> str:
-    return (
-        f"{_backend_url()}"
-        "/mcp/oauth/slack/callback"
-    )
-
-
-# =========================================================
-# ENV HELPERS
-# =========================================================
-
-def _require_env(
-    name: str,
-) -> str:
-    value = (
-        os.getenv(
-            name,
-        )
-        or ""
-    ).strip()
-
+def _require_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
     if not value:
-        raise RuntimeError(
-            f"{name} is not configured."
-        )
-
+        raise RuntimeError(f"{name} is not configured.")
     return value
 
 
-# =========================================================
-# PKCE
-# =========================================================
+def _create_pkce() -> tuple[str, str]:
+    verifier = secrets.token_urlsafe(64)
+    digest = hashlib.sha256(verifier.encode("utf-8")).digest()
+    return verifier, base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
-def _create_pkce() -> tuple[
-    str,
-    str,
-]:
-    verifier = (
-        secrets.token_urlsafe(
-            64
-        )
-    )
-
-    digest = hashlib.sha256(
-        verifier.encode(
-            "utf-8"
-        )
-    ).digest()
-
-    challenge = (
-        base64.urlsafe_b64encode(
-            digest
-        )
-        .decode(
-            "utf-8"
-        )
-        .rstrip("=")
-    )
-
-    return (
-        verifier,
-        challenge,
-    )
-
-
-# =========================================================
-# STATE
-# =========================================================
 
 def _create_state(
-    provider: str,
-    redirect_uri: str,
-    verifier: str,
+    provider: str, redirect_uri: str, verifier: str, session_id: str,
+    frontend_url: str | None = None,
 ) -> str:
-    state = (
-        secrets.token_urlsafe(
-            32
-        )
-    )
-
-    _oauth_states[
-        state
-    ] = {
-        "provider":
-            provider,
-
-        "redirect_uri":
-            redirect_uri,
-
-        "verifier":
-            verifier,
-
-        "created_at":
-            time.time(),
-    }
-
+    key = _key(provider)
+    if not session_id:
+        raise RuntimeError("An authenticated session is required.")
+    now = time.time()
+    with _store_lock:
+        expired = [state for state, record in _oauth_states.items()
+                   if now - record["created_at"] > STATE_TTL_SECONDS]
+        for state in expired:
+            _oauth_states.pop(state, None)
+        if sum(record["principal"] == key[0] for record in _oauth_states.values()) >= 32:
+            raise RuntimeError("Too many pending connections. Try again later.")
+        state = secrets.token_urlsafe(32)
+        _oauth_states[state] = {
+            "principal": key[0], "provider": provider, "session_id": session_id,
+            "version": _oauth_versions.get(key, 0), "redirect_uri": redirect_uri,
+            "connection_epoch": usage_limits.store.connector_epoch(provider),
+            "verifier": verifier, "created_at": now,
+            "frontend_url": frontend_url or _frontend_url(),
+        }
     return state
 
 
-def _consume_state(
-    state: str,
-    provider: str,
-) -> dict:
-    record = (
-        _oauth_states.pop(
-            state,
-            None,
-        )
-    )
-
-    if not record:
-        raise RuntimeError(
-            "Invalid or expired OAuth state."
-        )
-
-    if (
-        record.get(
-            "provider"
-        )
-        != provider
-    ):
-        raise RuntimeError(
-            "OAuth provider mismatch."
-        )
-
-    created_at = float(
-        record.get(
-            "created_at",
-            0,
-        )
-    )
-
-    if (
-        time.time()
-        - created_at
-        > STATE_TTL_SECONDS
-    ):
-        raise RuntimeError(
-            "OAuth request expired. Try connecting again."
-        )
-
+def _consume_state(state: str, provider: str, session_id: str) -> dict:
+    key = _key(provider)
+    with _store_lock:
+        record = _oauth_states.pop(state, None)
+        if (not record or not session_id or record["session_id"] != session_id
+                or record["principal"] != key[0] or record["provider"] != provider
+                or time.time() - record["created_at"] > STATE_TTL_SECONDS
+                or record["connection_epoch"] != usage_limits.store.connector_epoch(provider)
+                or record["version"] != _oauth_versions.get(key, 0)):
+            raise RuntimeError("Invalid or expired OAuth state.")
     return record
 
 
-# =========================================================
-# HTTP
-# =========================================================
+def discard_oauth_state(state: str, provider: str, session_id: str) -> None:
+    """A denied or canceled callback consumes its state without changing tokens."""
+    try:
+        _consume_state(state, provider, session_id)
+    except RuntimeError:
+        pass
 
-def _post_form_sync(
-    url: str,
-    data: dict,
-    *,
-    basic_auth:
-        tuple[
-            str,
-            str,
-        ]
-        | None = None,
-) -> dict:
-    encoded = urlencode(
-        data
-    ).encode(
-        "utf-8"
-    )
 
-    headers = {
-        "Content-Type":
-            "application/x-www-form-urlencoded",
-
-        "Accept":
-            "application/json",
-    }
-
+def _post_form_sync(url: str, data: dict, *, basic_auth: tuple[str, str] | None = None) -> dict:
+    headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
     if basic_auth:
-        username, password = (
-            basic_auth
-        )
-
-        credential = (
-            f"{username}:{password}"
-        )
-
-        encoded_auth = (
-            base64.b64encode(
-                credential.encode(
-                    "utf-8"
-                )
-            )
-            .decode(
-                "utf-8"
-            )
-        )
-
-        headers[
-            "Authorization"
-        ] = (
-            f"Basic {encoded_auth}"
-        )
-
-    request = Request(
-        url,
-
-        data=
-            encoded,
-
-        headers=
-            headers,
-
-        method=
-            "POST",
-    )
-
+        credential = base64.b64encode(":".join(basic_auth).encode()).decode("ascii")
+        headers["Authorization"] = f"Basic {credential}"
+    request = Request(url, data=urlencode(data).encode(), headers=headers, method="POST")
     try:
-        with urlopen(
-            request,
-            timeout=20,
-        ) as response:
-            body = (
-                response
-                .read()
-                .decode(
-                    "utf-8"
-                )
-            )
-
-    except HTTPError as exc:
-        try:
-            body = (
-                exc.read()
-                .decode(
-                    "utf-8"
-                )
-            )
-
-        except Exception:
-            body = str(
-                exc
-            )
-
-        raise RuntimeError(
-            body
-            or "OAuth request failed."
-        ) from exc
-
-    except URLError as exc:
-        raise RuntimeError(
-            f"OAuth provider could not be reached: {exc}"
-        ) from exc
-
-    try:
-        parsed = json.loads(
-            body
-        )
-
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            "OAuth provider returned an invalid response."
-        ) from exc
-
-    if not isinstance(
-        parsed,
-        dict,
-    ):
-        raise RuntimeError(
-            "OAuth provider returned an invalid response."
-        )
-
+        with build_opener(_NoRedirects()).open(request, timeout=20) as response:
+            parsed = json.loads(response.read(1024 * 1024))
+    except (HTTPError, URLError, ValueError, OSError):
+        # Provider response bodies can contain codes and tokens; never propagate them.
+        raise RuntimeError(OAUTH_ERROR) from None
+    if not isinstance(parsed, dict):
+        raise RuntimeError(OAUTH_ERROR)
     return parsed
 
 
-async def _post_form(
-    url: str,
-    data: dict,
-    *,
-    basic_auth:
-        tuple[
-            str,
-            str,
-        ]
-        | None = None,
-) -> dict:
-    return await asyncio.to_thread(
-        _post_form_sync,
-        url,
-        data,
-        basic_auth=
-            basic_auth,
-    )
+async def _post_form(url: str, data: dict, *, basic_auth: tuple[str, str] | None = None) -> dict:
+    return await asyncio.to_thread(_post_form_sync, url, data, basic_auth=basic_auth)
 
-
-# =========================================================
-# TOKEN STORE
-# =========================================================
 
 def _save_token(
-    provider: str,
-    payload: dict,
+    provider: str, payload: dict, *, expected_version: int | None = None,
+    expected_epoch: int | None = None, refreshing: bool = False,
 ) -> None:
-    expires_in = (
-        payload.get(
-            "expires_in"
-        )
-    )
-
-    expires_at = None
-
-    if isinstance(
-        expires_in,
-        (
-            int,
-            float,
-        ),
+    key = _key(provider)
+    access_token = payload.get("access_token")
+    if not isinstance(access_token, str) or not access_token.strip():
+        raise RuntimeError(OAUTH_ERROR)
+    expires_in = payload.get("expires_in")
+    if expires_in is not None and (
+        isinstance(expires_in, bool) or not isinstance(expires_in, (int, float))
+        or not math.isfinite(expires_in)
     ):
-        expires_at = (
-            time.time()
-            + float(
-                expires_in
-            )
+        raise RuntimeError(OAUTH_ERROR)
+    expires_at = time.time() + float(expires_in) if isinstance(expires_in, (int, float)) else None
+    with _store_lock:
+        if expected_version is not None and _oauth_versions.get(key, 0) != expected_version:
+            raise RuntimeError(OAUTH_ERROR)
+        epoch = usage_limits.store.connector_epoch(
+            provider, advance=not refreshing, expected=expected_epoch,
         )
-
-    _oauth_tokens[
-        provider
-    ] = {
-        **payload,
-
-        "expires_at":
-            expires_at,
-    }
+        _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
+        _oauth_tokens[key] = {
+            "access_token": access_token, "refresh_token": payload.get("refresh_token"),
+            "expires_at": expires_at,
+            "connection_epoch": epoch,
+        }
 
 
-def get_oauth_token_record(
-    provider: str,
-) -> dict | None:
-    token = (
-        _oauth_tokens.get(
-            provider
+def get_oauth_token_record(provider: str) -> dict | None:
+    with _store_lock:
+        key = _key(provider)
+        record = _oauth_tokens.get(key)
+        if record and record["connection_epoch"] != usage_limits.store.connector_epoch(provider):
+            _oauth_tokens.pop(key, None)
+            _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
+            return None
+        return dict(record) if record else None
+
+
+def disconnect_oauth_provider(provider: str) -> None:
+    key = _key(provider)
+    with _store_lock:
+        usage_limits.store.connector_epoch(provider, advance=True)
+        _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
+        _oauth_tokens.pop(key, None)
+        for state, record in list(_oauth_states.items()):
+            if (record["principal"], record["provider"]) == key:
+                _oauth_states.pop(state, None)
+
+
+def is_oauth_connected(provider: str) -> bool:
+    record = get_oauth_token_record(provider)
+    if not record:
+        return False
+    expires = record.get("expires_at")
+    if expires is not None and time.time() >= expires - TOKEN_EXPIRY_SKEW_SECONDS:
+        if provider != "google-drive" or not record.get("refresh_token"):
+            disconnect_oauth_provider(provider)
+            return False
+    return True
+
+
+@limited("mcp")
+def start_google_drive_oauth(
+    session_id: str, *, backend_url: str | None = None, frontend_url: str | None = None,
+) -> dict:
+    client_id = _require_env("GOOGLE_MCP_CLIENT_ID")
+    _require_env("GOOGLE_MCP_CLIENT_SECRET")
+    redirect_uri = f"{_backend_url(backend_url)}/mcp/oauth/google-drive/callback"
+    verifier, challenge = _create_pkce()
+    state = _create_state("google-drive", redirect_uri, verifier, session_id, frontend_url)
+    params = {"client_id": client_id, "redirect_uri": redirect_uri, "response_type": "code",
+              "scope": " ".join(GOOGLE_DRIVE_SCOPES), "access_type": "offline",
+              "include_granted_scopes": "true", "prompt": "consent", "state": state,
+              "code_challenge": challenge, "code_challenge_method": "S256"}
+    return {"authorization_url": f"{GOOGLE_AUTH_URL}?{urlencode(params)}", "provider": "google-drive"}
+
+
+@limited("mcp")
+def start_slack_oauth(
+    session_id: str, *, backend_url: str | None = None, frontend_url: str | None = None,
+) -> dict:
+    client_id = _require_env("SLACK_MCP_CLIENT_ID")
+    _require_env("SLACK_MCP_CLIENT_SECRET")
+    redirect_uri = f"{_backend_url(backend_url)}/mcp/oauth/slack/callback"
+    if not redirect_uri.startswith("https://"):
+        raise RuntimeError(
+            "Slack OAuth requires an HTTPS callback. Configure CLAWBIT_PUBLIC_BACKEND_URL."
         )
-    )
-
-    if not token:
-        return None
-
-    return dict(
-        token
-    )
+    state = _create_state("slack", redirect_uri, "", session_id, frontend_url)
+    params = {"client_id": client_id, "redirect_uri": redirect_uri,
+              "scope": ",".join(SLACK_SCOPES), "state": state}
+    return {"authorization_url": f"{SLACK_AUTH_URL}?{urlencode(params)}", "provider": "slack"}
 
 
-def disconnect_oauth_provider(
-    provider: str,
-) -> None:
-    _oauth_tokens.pop(
-        provider,
-        None,
-    )
+def _validate_completion(provider: str, record: dict, validate_session: Callable[[], bool]) -> None:
+    if current_owner() != record["principal"] or not validate_session():
+        raise RuntimeError("The initiating session has expired. Connect again.")
+    if _oauth_versions.get(_key(provider), 0) != record["version"]:
+        raise RuntimeError(OAUTH_ERROR)
+    usage_limits.store.connector_epoch(provider, expected=record["connection_epoch"])
 
 
-def is_oauth_connected(
-    provider: str,
-) -> bool:
-    return (
-        provider
-        in _oauth_tokens
-    )
-
-
-# =========================================================
-# GOOGLE DRIVE START
-# =========================================================
-
-def start_google_drive_oauth() -> dict:
-    client_id = (
-        _require_env(
-            "GOOGLE_MCP_CLIENT_ID"
-        )
-    )
-
-    _require_env(
-        "GOOGLE_MCP_CLIENT_SECRET"
-    )
-
-    redirect_uri = (
-        _google_redirect_uri()
-    )
-
-    (
-        verifier,
-        challenge,
-    ) = _create_pkce()
-
-    state = _create_state(
-        "google-drive",
-        redirect_uri,
-        verifier,
-    )
-
-    params = {
-        "client_id":
-            client_id,
-
-        "redirect_uri":
-            redirect_uri,
-
-        "response_type":
-            "code",
-
-        "scope":
-            " ".join(
-                GOOGLE_DRIVE_SCOPES
-            ),
-
-        "access_type":
-            "offline",
-
-        "include_granted_scopes":
-            "true",
-
-        "prompt":
-            "consent",
-
-        "state":
-            state,
-
-        "code_challenge":
-            challenge,
-
-        "code_challenge_method":
-            "S256",
-    }
-
-    return {
-        "authorization_url":
-            (
-                f"{GOOGLE_AUTH_URL}"
-                f"?{urlencode(params)}"
-            ),
-
-        "provider":
-            "google-drive",
-    }
-
-
-# =========================================================
-# GOOGLE DRIVE CALLBACK
-# =========================================================
-
+@limited("mcp")
 async def complete_google_drive_oauth(
-    *,
-    code: str,
-    state: str,
+    *, code: str, state: str, session_id: str, validate_session: Callable[[], bool],
 ) -> dict:
-    state_record = (
-        _consume_state(
-            state,
-            "google-drive",
+    record = _consume_state(state, "google-drive", session_id)
+    _validate_completion("google-drive", record, validate_session)
+    payload = await _post_form(GOOGLE_TOKEN_URL, {
+        "code": code, "client_id": _require_env("GOOGLE_MCP_CLIENT_ID"),
+        "client_secret": _require_env("GOOGLE_MCP_CLIENT_SECRET"),
+        "redirect_uri": record["redirect_uri"], "grant_type": "authorization_code",
+        "code_verifier": record["verifier"],
+    })
+    with _store_lock:
+        _validate_completion("google-drive", record, validate_session)
+        _save_token(
+            "google-drive", payload, expected_version=record["version"],
+            expected_epoch=record["connection_epoch"],
         )
-    )
-
-    client_id = (
-        _require_env(
-            "GOOGLE_MCP_CLIENT_ID"
-        )
-    )
-
-    client_secret = (
-        _require_env(
-            "GOOGLE_MCP_CLIENT_SECRET"
-        )
-    )
-
-    payload = await _post_form(
-        GOOGLE_TOKEN_URL,
-
-        {
-            "code":
-                code,
-
-            "client_id":
-                client_id,
-
-            "client_secret":
-                client_secret,
-
-            "redirect_uri":
-                state_record[
-                    "redirect_uri"
-                ],
-
-            "grant_type":
-                "authorization_code",
-
-            "code_verifier":
-                state_record[
-                    "verifier"
-                ],
-        },
-    )
-
-    access_token = (
-        payload.get(
-            "access_token"
-        )
-    )
-
-    if not access_token:
-        raise RuntimeError(
-            payload.get(
-                "error_description"
-            )
-            or payload.get(
-                "error"
-            )
-            or "Google did not return an access token."
-        )
-
-    _save_token(
-        "google-drive",
-        payload,
-    )
-
-    return {
-        "success":
-            True,
-
-        "provider":
-            "google-drive",
-    }
+    return {"frontend_url": record["frontend_url"], "success": True, "provider": "google-drive"}
 
 
-# =========================================================
-# GOOGLE TOKEN REFRESH
-# =========================================================
-
-async def _refresh_google_drive_token(
-    token_record: dict,
-) -> str:
-    refresh_token = (
-        token_record.get(
-            "refresh_token"
-        )
-    )
-
-    if not refresh_token:
-        raise RuntimeError(
-            "Google session expired. Reconnect Google Drive."
-        )
-
-    payload = await _post_form(
-        GOOGLE_TOKEN_URL,
-
-        {
-            "client_id":
-                _require_env(
-                    "GOOGLE_MCP_CLIENT_ID"
-                ),
-
-            "client_secret":
-                _require_env(
-                    "GOOGLE_MCP_CLIENT_SECRET"
-                ),
-
-            "refresh_token":
-                refresh_token,
-
-            "grant_type":
-                "refresh_token",
-        },
-    )
-
-    access_token = (
-        payload.get(
-            "access_token"
-        )
-    )
-
-    if not access_token:
-        raise RuntimeError(
-            "Google Drive token refresh failed."
-        )
-
-    payload[
-        "refresh_token"
-    ] = refresh_token
-
-    _save_token(
-        "google-drive",
-        payload,
-    )
-
-    return str(
-        access_token
-    )
-
-
-async def get_google_drive_access_token() -> (
-    str | None
-):
-    token_record = (
-        get_oauth_token_record(
-            "google-drive"
-        )
-    )
-
-    if not token_record:
-        return None
-
-    access_token = (
-        token_record.get(
-            "access_token"
-        )
-    )
-
-    if not access_token:
-        return None
-
-    expires_at = (
-        token_record.get(
-            "expires_at"
-        )
-    )
-
-    if (
-        isinstance(
-            expires_at,
-            (
-                int,
-                float,
-            ),
-        )
-        and time.time()
-        >= (
-            float(
-                expires_at
-            )
-            - TOKEN_EXPIRY_SKEW_SECONDS
-        )
-    ):
-        return await _refresh_google_drive_token(
-            token_record
-        )
-
-    return str(
-        access_token
-    )
-
-
-# =========================================================
-# SLACK START
-# =========================================================
-
-def start_slack_oauth() -> dict:
-    client_id = _require_env(
-        "SLACK_MCP_CLIENT_ID"
-    )
-
-    _require_env(
-        "SLACK_MCP_CLIENT_SECRET"
-    )
-
-    redirect_uri = (
-        _slack_redirect_uri()
-    )
-
-    # Slack requires HTTPS for this callback
-    # in our current local setup.
-    if not redirect_uri.startswith(
-        "https://"
-    ):
-        raise RuntimeError(
-            "Slack OAuth requires an HTTPS callback. "
-            "Set CLAWBIT_PUBLIC_BACKEND_URL "
-            "to your HTTPS ngrok URL."
-        )
-
-    state = _create_state(
-        "slack",
-        redirect_uri,
-        "",
-    )
-
-    params = {
-        "client_id":
-            client_id,
-
-        "redirect_uri":
-            redirect_uri,
-
-        "scope":
-            ",".join(
-                SLACK_SCOPES
-            ),
-
-        "state":
-            state,
-    }
-
-    return {
-        "authorization_url":
-            (
-                f"{SLACK_AUTH_URL}"
-                f"?{urlencode(params)}"
-            ),
-
-        "provider":
-            "slack",
-    }
-
-
-# =========================================================
-# SLACK CALLBACK
-# =========================================================
-
+@limited("mcp")
 async def complete_slack_oauth(
-    *,
-    code: str,
-    state: str,
+    *, code: str, state: str, session_id: str, validate_session: Callable[[], bool],
 ) -> dict:
-    state_record = _consume_state(
-        state,
-        "slack",
-    )
-
-    client_id = _require_env(
-        "SLACK_MCP_CLIENT_ID"
-    )
-
-    client_secret = _require_env(
-        "SLACK_MCP_CLIENT_SECRET"
-    )
-
-    payload = await _post_form(
-        SLACK_TOKEN_URL,
-
-        {
-            "code":
-                code,
-
-            "redirect_uri":
-                state_record[
-                    "redirect_uri"
-                ],
-
-            "grant_type":
-                "authorization_code",
-        },
-
-        basic_auth=(
-            client_id,
-            client_secret,
-        ),
-    )
-
-    if (
-        payload.get(
-            "ok"
+    record = _consume_state(state, "slack", session_id)
+    _validate_completion("slack", record, validate_session)
+    payload = await _post_form(SLACK_TOKEN_URL, {
+        "code": code, "redirect_uri": record["redirect_uri"], "grant_type": "authorization_code",
+    }, basic_auth=(_require_env("SLACK_MCP_CLIENT_ID"), _require_env("SLACK_MCP_CLIENT_SECRET")))
+    if payload.get("ok") is False:
+        raise RuntimeError(OAUTH_ERROR)
+    with _store_lock:
+        _validate_completion("slack", record, validate_session)
+        _save_token(
+            "slack", payload, expected_version=record["version"],
+            expected_epoch=record["connection_epoch"],
         )
-        is False
-    ):
-        raise RuntimeError(
-            payload.get(
-                "error",
-                "Slack OAuth failed.",
+    return {"frontend_url": record["frontend_url"], "success": True, "provider": "slack"}
+
+
+@limited("mcp")
+async def get_google_drive_access_token() -> str | None:
+    key = _key("google-drive")
+    with _store_lock:
+        lock = _refresh_locks.setdefault(key, Lock())
+    # A thread lock also works across TestClient loops and sync disconnects;
+    # nonblocking acquisition keeps cancellation responsive while waiting.
+    while not lock.acquire(blocking=False):
+        await asyncio.sleep(0.01)
+    try:
+        record = get_oauth_token_record("google-drive")
+        if not record:
+            return None
+        expires = record.get("expires_at")
+        if expires is None or time.time() < expires - TOKEN_EXPIRY_SKEW_SECONDS:
+            return record["access_token"]
+        version = _oauth_versions.get(key, 0)
+        try:
+            if not record.get("refresh_token"):
+                raise RuntimeError(OAUTH_ERROR)
+            payload = await _post_form(GOOGLE_TOKEN_URL, {
+                "client_id": _require_env("GOOGLE_MCP_CLIENT_ID"),
+                "client_secret": _require_env("GOOGLE_MCP_CLIENT_SECRET"),
+                "refresh_token": record["refresh_token"], "grant_type": "refresh_token",
+            })
+            payload["refresh_token"] = payload.get("refresh_token") or record["refresh_token"]
+            _save_token(
+                "google-drive", payload, expected_version=version,
+                expected_epoch=record["connection_epoch"], refreshing=True,
             )
-        )
-
-    access_token = (
-        payload.get(
-            "access_token"
-        )
-    )
-
-    if not access_token:
-        raise RuntimeError(
-            "Slack did not return a user access token."
-        )
-
-    _save_token(
-        "slack",
-        payload,
-    )
-
-    return {
-        "success":
-            True,
-
-        "provider":
-            "slack",
-
-        "team":
-            payload.get(
-                "team"
-            ),
-    }
+            return payload["access_token"]
+        except Exception:
+            with _store_lock:
+                if (
+                    _oauth_versions.get(key, 0) == version
+                    and usage_limits.store.connector_epoch("google-drive")
+                    == record["connection_epoch"]
+                ):
+                    disconnect_oauth_provider("google-drive")
+            raise RuntimeError(OAUTH_ERROR) from None
+    finally:
+        lock.release()
 
 
-def get_slack_access_token() -> (
-    str | None
-):
-    token_record = (
-        get_oauth_token_record(
-            "slack"
-        )
-    )
-
-    if not token_record:
+def get_slack_access_token() -> str | None:
+    if not is_oauth_connected("slack"):
         return None
+    record = get_oauth_token_record("slack")
+    return record["access_token"] if record else None
 
-    token = (
-        token_record.get(
-            "access_token"
-        )
-    )
-
-    if not token:
-        return None
-
-    return str(
-        token
-    )
-
-
-# =========================================================
-# STATUS
-# =========================================================
 
 def get_oauth_status() -> dict:
-    return {
-        "google-drive":
-            {
-                "connected":
-                    is_oauth_connected(
-                        "google-drive"
-                    ),
-            },
-
-        "slack":
-            {
-                "connected":
-                    is_oauth_connected(
-                        "slack"
-                    ),
-            },
-    }
+    return {provider: {"connected": is_oauth_connected(provider)}
+            for provider in ("google-drive", "slack")}

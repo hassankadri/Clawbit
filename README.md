@@ -1,237 +1,243 @@
-<div align="center">
+# Clawbit
 
-<img src="banner (1).svg" alt="Clawbit" width="100%" />
+Clawbit is a locally hosted AI assistant with a Next.js interface and a
+FastAPI/LangGraph backend. It supports authenticated chat, progressive SSE
+responses, uploaded-document retrieval, explicit saved memory, research tools
+and principal-scoped MCP connectors.
 
-<br/>
+Offline tests verify application behavior and security boundaries. They do not
+establish current provider availability, real-model reasoning quality or
+production readiness. Manual browser and live-provider verification remain a
+separate, explicitly authorized step.
 
-# 🦞 Clawbit
+## Implemented behavior
 
-### An agent that reads, remembers, and reasons — so you don't have to.
+- A single initialized owner signs in with an HTTP-only session cookie. CSRF,
+  exact origins and backend ownership checks protect private operations.
+- Thirteen registered Google, Groq and OpenRouter models retain their actual
+  configured availability. Free-account checks, exact model consent and disabled
+  paid fallbacks remain mandatory; a registered model can be unavailable.
+- Chat streams actual provider deltas. Stop preserves partial answers and
+  releases local concurrency leases after cleanup.
+- Server history retains conversation IDs, revisions, model/mode, attachments
+  and citations. Edit/retry/regenerate reconstruct context without replaying
+  side-effecting tools. Browser history import is explicit, never automatic.
+- RAG uses Chroma/vector candidates, BM25, hybrid ranking and optional FlashRank
+  reranking. Source opening rechecks ownership. Citation IDs establish retrieved
+  provenance, not factual entailment.
+- Research Mode uses read-only connector tools, bounded searches, deduplication
+  and explicit partial/missing-evidence reports. Synthesis remains model dependent.
+- Saved memory has confirmed create/update/delete controls, workspace and user
+  scopes, duplicate prevention and version conflicts. Retrieval uses bounded
+  lexical matching. A model cannot confirm or write a memory for the user.
+- GitHub, Notion, Stripe, Google Drive and Slack connectors use principal-scoped
+  credentials, OAuth/session binding where applicable, and stale-handle rejection.
 
-<em>A LangGraph-native AI agent that decides for itself whether to search its memory, search the web, or just answer — built for developers who want an agent brain, not a chatbot wrapper.</em>
+There is no public registration, distributed credential vault, semantic memory
+index, guaranteed prompt-injection immunity, automatic tool approval system,
+OCR upgrade or secure physical erasure of deleted records. Project/library
+metadata still includes browser-local storage; it is not a cloud file service.
 
-<br/>
+## Structure
 
-[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-Backend-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-Agent_Engine-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)](https://www.langchain.com/langgraph)
-[![Gemini](https://img.shields.io/badge/Gemini-LLM-8E75B2?style=for-the-badge&logo=googlegemini&logoColor=white)](https://ai.google.dev/)
-[![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_Store-FF6F00?style=for-the-badge)](https://www.trychroma.com/)
-[![License](https://img.shields.io/badge/License-See_LICENSE-blue?style=for-the-badge)](./LICENSE)
-
-<p>
-  <a href="#-what-is-clawbit">Overview</a> •
-  <a href="#-how-it-thinks">Architecture</a> •
-  <a href="#-tech-stack">Tech Stack</a> •
-  <a href="#-quickstart">Quickstart</a> •
-  <a href="#-roadmap">Roadmap</a>
-</p>
-
-</div>
-
-<br/>
-
-## 🦖 What is Clawbit?
-
-Clawbit is a small, sharp-clawed AI agent — a backend that **thinks in graphs, not scripts**.
-
-Instead of a single prompt-in, text-out pipeline, Clawbit is built around **LangGraph**, meaning its reasoning is a *state machine*: the agent decides whether to search the web, dig through your documents, or answer directly — and that decision is a first-class node in the graph, not a hardcoded `if/else`.
-
-Think of it less like a chatbot, and more like a tiny digital creature with three senses:
-
-<div align="center">
-<img src="senses.svg" alt="Clawbit three-sense field scan" width="100%"/>
-</div>
-
-<br/>
-
-## 🧩 How It Thinks
-
-The agent doesn't just *answer* — it **routes itself**. Every query is a decision tree Clawbit walks in real time, looping back to its own judgment node until it's confident enough to respond.
-
-```mermaid
-flowchart LR
-    U([👤 User Query]) --> A{🧠 Agent Node}
-    A -- "needs facts<br/>from docs" --> R[📚 RAG Retriever<br/><i>ChromaDB</i>]
-    A -- "needs fresh<br/>info" --> S[🌐 Web Search<br/><i>Tavily</i>]
-    A -- "knows enough" --> G[✍️ Generate Answer]
-    R -.-> A
-    S -.-> A
-    G --> O([💬 Response])
-
-    classDef userNode fill:#1C3C3C,stroke:#0d1f1f,color:#fff,font-weight:bold
-    classDef agentNode fill:#8E75B2,stroke:#5a4a75,color:#fff,font-weight:bold
-    classDef ragNode fill:#FF6F00,stroke:#b34e00,color:#fff,font-weight:bold
-    classDef searchNode fill:#009688,stroke:#00695c,color:#fff,font-weight:bold
-    classDef genNode fill:#3776AB,stroke:#254a6e,color:#fff,font-weight:bold
-
-    class U,O userNode
-    class A agentNode
-    class R ragNode
-    class S searchNode
-    class G genNode
+```text
+backend/
+  app.py, auth.py, ownership.py       HTTP, sessions and access boundaries
+  agent.py, chat_execution.py         LangGraph, streaming and cancellation
+  models.py, openrouter_model.py      Guarded model registry and adapters
+  rag.py, evidence.py, research.py    Retrieval, citations and research policy
+  history_store.py, history_chat.py   Durable revisions and turn receipts
+  memory_store.py, knowledge_api.py   Confirmed memory and source access
+  mcp_client.py, mcp_oauth.py         Connector lifecycle and credentials
+  usage_limits.py, observability.py  Admission and structured diagnostics
+  evaluate.py, evals/, tests/         Offline evaluations and regressions
+frontend/                            Next.js/React/TypeScript application
+.github/workflows/backend-ci.yml     Backend and frontend offline CI
+docs/                               Batch reports and operational details
 ```
 
-**Why this matters:** most "AI agent" projects are a single LLM call with a system prompt. Clawbit's control flow is an explicit, inspectable graph — every routing decision is a node you can log, test, and extend independently, and every conversation is checkpointed so the agent can resume mid-thought.
+## Existing installation: ordinary startup
 
-<br/>
+The current installation already has an owner and a completed legacy ownership
+claim. **Do not rerun owner initialization or ownership migration.** Keep its
+runtime directory, browser profile and backups. Do not reset a database to fix a
+login, history or retrieval error.
 
-## ⚙️ Tech Stack
+Backend, in PowerShell:
 
-<table>
-<tr>
-<th width="50%">🧠 Reasoning</th>
-<th width="50%">🌐 Perception</th>
-</tr>
-<tr valign="top">
-<td>
-
-| Package | Role |
-|---|---|
-| `langchain` + `langgraph` | Agent orchestration & graph state |
-| `langchain-google-genai` | Gemini as the reasoning engine |
-| `langgraph-checkpoint-sqlite` | Persistent, resumable agent memory |
-
-</td>
-<td>
-
-| Package | Role |
-|---|---|
-| `tavily-python` | Live web search |
-| `langchain-tavily` | Search tool binding for the graph |
-
-</td>
-</tr>
-<tr>
-<th>📚 Knowledge</th>
-<th>🚀 Body</th>
-</tr>
-<tr valign="top">
-<td>
-
-| Package | Role |
-|---|---|
-| `chromadb` + `langchain-chroma` | Vector storage & similarity search |
-| `pypdf`, `docx2txt` | Document ingestion (PDF & Word) |
-| `langchain-text-splitters` | Smart chunking |
-
-</td>
-<td>
-
-| Package | Role |
-|---|---|
-| `fastapi` + `uvicorn` | API server |
-| `jinja2` | HTML templating |
-| `python-multipart` | File uploads |
-| `sqlalchemy` | Database ORM |
-| `python-dotenv` | Secrets, kept secret |
-
-</td>
-</tr>
-</table>
-
-<br/>
-
-## 🗂️ Project Structure
-
-```
-Clawbit/
-├── 🚀 app.py              FastAPI entry point — where requests land
-├── 🧠 agent.py             The LangGraph brain: nodes, edges, decisions
-├── 📚 rag.py               Document ingestion + retrieval pipeline
-├── 🛠️  tool.py              Tools the agent is allowed to reach for
-├── 🗄️  database.py          SQLAlchemy models & persistence layer
-├── 🎨 templates/
-│   └── index.html         The face Clawbit shows the world
-├── 📦 requirements.txt     Everything Clawbit needs to come alive
-└── 📖 README.md            You are here
+```powershell
+Set-Location 'D:\My Projects\Clawbit AI\backend'
+.\.venv\Scripts\python.exe -m uvicorn app:app --host 127.0.0.1 --port 8000 --no-access-log
 ```
 
-> 🥚 **Current stage — pre-hatch.** The skeleton is fully drawn: `app.py`, `agent.py`, `rag.py`, `tool.py`, and `database.py` are scaffolded, wired for imports, and ready to be filled with logic. Watch the [Roadmap](#-roadmap) for hatch progress.
+In a second terminal:
 
-<br/>
-
-## 🚀 Quickstart
-
-<table>
-<tr><td>
-
-**1. Clone & enter**
-
-```bash
-git clone https://github.com/hassankadri/Clawbit.git
-cd Clawbit
+```powershell
+Set-Location 'D:\My Projects\Clawbit AI\frontend'
+npm run dev
 ```
 
-**2. Give it a home**
+Open `http://localhost:3000` and sign in with the existing account. Use
+`localhost` consistently, or `127.0.0.1` consistently. The default API uses the
+browser's hostname on port 8000. Logout revokes the session on the server.
+Connector credentials and pending OAuth state are in process memory: reconnect
+after restarting the backend, using existing credentials. Use one backend worker.
 
-```bash
-conda create -n clawbit python=3.11 -y
-conda activate clawbit
+## Fresh installation only
+
+Prerequisites: Git, Windows PowerShell, Python 3.12 and Node.js 24 with npm.
+The locally verified versions are Python **3.12.3** and Node **24.13.0**; CI pins
+these versions. This is a compatibility snapshot, not a claim they are the latest
+security releases. Review runtime upgrades separately and run the full checks.
+
+From a new checkout:
+
+```powershell
+Set-Location backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt -r requirements-lock.txt
+.\.venv\Scripts\python.exe -m pip check
+.\.venv\Scripts\python.exe setup_owner.py
 ```
 
-**3. Feed it dependencies**
+Owner setup is interactive: type `INITIALIZE`, choose a username and enter a
+hidden 15–128 character passphrase twice. There are no default credentials or
+password command-line arguments. Only a fresh installation needs this command.
+For frontend dependencies, run `npm ci` from `frontend`, then start both services
+as above. No dependency installation is needed for routine startup.
 
-```bash
-pip install -r requirements.txt
+Existing unclaimed installations need a separately planned, backed-up ownership
+claim with workers stopped. Read [ownership and recovery](docs/BATCH_4B_1_OWNERSHIP.md)
+before any migration. The existing configured installation has already completed
+that step. First use can perform additive history/memory schema upgrades with
+SQLite backups; it must not recreate or reset existing stores.
+
+## Configuration
+
+Set process environment variables or configure a private local backend `.env`.
+Never commit credentials. No real values belong in logs, screenshots or reports.
+
+| Variable | Purpose |
+| --- | --- |
+| `GOOGLE_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY` | Optional provider credentials; missing providers fail closed |
+| `TAVILY_API_KEY` | Web-search credential |
+| `CLAWBIT_RUNTIME_DIR` | Stable private runtime root; defaults to the backend directory |
+| `CLAWBIT_AUTH_MODE` | `local` by default; `production` requires HTTPS and secure cookies |
+| `CLAWBIT_ALLOWED_ORIGINS` | Exact trusted frontend origins; explicit HTTPS values required in production |
+| `CLAWBIT_FRONTEND_URL`, `CLAWBIT_PUBLIC_BACKEND_URL` | OAuth redirect/callback configuration; Slack requires HTTPS |
+| `GOOGLE_MCP_CLIENT_ID`, `GOOGLE_MCP_CLIENT_SECRET`, `SLACK_MCP_CLIENT_ID`, `SLACK_MCP_CLIENT_SECRET` | Optional OAuth application configuration |
+| `NEXT_PUBLIC_API_URL` | Optional frontend API origin, when overriding the local default |
+| `CLAWBIT_LOG_LEVEL` | `DEBUG`, `INFO` (default), `WARNING`, `ERROR` or `CRITICAL` |
+| `CLAWBIT_LIMIT_<OPERATION>_<SETTING>` | Positive operation limits; see the quota report |
+| `CLAWBIT_TOOL_CALLS_PER_RESPONSE` | Default 12 across all tool rounds |
+
+Google/Groq require billing-disabled free-only accounts and a matching credential
+fingerprint attestation in `backend/free_tier_policy.json`. A changed key must be
+reconfirmed; do not copy another account's attestation. OpenRouter requires the
+exact allowlisted free model, zero advertised prices and an operational eligible
+endpoint. Consent is per model and does not guarantee provider confidentiality.
+See [free models and known provider limitations](docs/FREE_MODELS.md).
+
+Ordinary pytest/evaluation commands use dummy keys, disable dotenv loading and
+block external sockets. Do not run `model_smoke.py` as part of offline validation.
+A live smoke requires separate explicit authorization and the existing free-tier
+checks; never enable billing or paid fallbacks to make a test pass.
+
+## Data, research and memory
+
+Uploads and retrieval are authorized by the thread's owner. The existing limits
+include 10 MiB per file, ten attachments per thread, bounded extraction and
+1,500 chunks per document. Research sources can be opened through authenticated
+previews/downloads; missing sources remain unavailable. Unknown citation IDs are
+unverified. Conflicting sources must be assessed by the user; provenance alone
+cannot establish which statement is true.
+
+Use Saved memory to confirm workspace facts or personal preferences. Explicit
+updates require the current version; deletion removes an item from future memory
+context. Tombstones and backups can retain old content. Do not save credentials;
+secret-pattern rejection is heuristic. Conversation history and LangGraph
+checkpoints are distinct from saved memory.
+
+Chat defaults to 20 requests/minute and 500/day; inference 40/1,000; upload and
+ingestion 10/100; retrieval and embedding 60/2,000; MCP management 30/500; MCP
+execution 60/1,000; built-in tools 60/2,000. Concurrency limits also apply. Fixed
+UTC minute/day windows and counters persist across restarts. Admitted failed or
+cancelled requests count. See [all quotas and reset rules](docs/BATCH_4B_2_MCP_LIMITS.md).
+
+The bundled `get_project_status` MCP tool is an explicit local development
+diagnostic. It reports four installed component versions over stdio and does not
+read user data or test providers. It is not automatically added to every account
+or exposed as an unauthenticated HTTP endpoint. Its real-protocol tests use the
+same principal/generation guard as remote connectors.
+
+## Verification and evaluation
+
+From `backend`:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests -q -W error::RuntimeWarning --tb=short
+.\.venv\Scripts\python.exe evaluate.py --category all
+.\.venv\Scripts\python.exe evaluate.py --category rag --output .pytest_cache/rag-evaluation
 ```
 
-**4. Whisper it your secrets**
+Categories are `agent`, `rag`, `research`, `memory` and `all`. Reports default to
+`.pytest_cache/evaluations/results.json` and `summary.md`. Every required scenario
+must pass; missing, skipped or failed cases cause nonzero exit. The runner reuses
+existing security/graph tests; those overlapping results must not be added to the
+full-suite count. The manifest describes fixture input, allowed/forbidden actions,
+expected behavior and objective assertion criteria.
 
-Create a `.env` file in the root — this file is git-ignored, keep it that way:
+The synthetic retrieval corpus measures recall/precision@3, MRR, hit rate, source
+coverage, duplicate-content rate and latency. Actual BM25 is compared with the
+production hybrid pipeline supplied controlled lexical candidates and an identity
+reranker. This does **not** benchmark hosted semantic embeddings or learned
+FlashRank quality. Citation validity/provenance are separate from claim
+faithfulness. Relevance/performance baselines are reported honestly; deterministic
+access/provenance invariants and a direct lookup are enforced gates.
 
-```env
-GOOGLE_API_KEY=your_gemini_api_key
-TAVILY_API_KEY=your_tavily_api_key
-DATABASE_URL=your_database_connection_string
+From `frontend`:
+
+```powershell
+npm test
+node node_modules/typescript/bin/tsc --noEmit --incremental false
+npm run lint
+npm run build
 ```
 
-**5. Wake it up**
+CI runs these commands on Windows with pinned dependencies, read-only repository
+permissions and no provider secrets. It compiles Python without importing stores,
+runs full pytest and offline evaluations, and retains evaluation artifacts for
+seven days. Hosted CI has not run for these uncommitted changes. See the
+[Batch 8 audit](docs/BATCH_8_FINAL_AUDIT.md) for measured results and limitations.
 
-```bash
-python app.py
-```
+## Diagnostics and privacy
 
-Clawbit opens its eyes at **http://localhost:8000** 👀
+The `clawbit` logger emits JSON at operation boundaries, never per token. A
+server-generated `X-Request-ID` correlates HTTP, authentication, graph admission,
+tools/retrieval, persistence errors and SSE outcomes. Client IDs are not trusted.
+Model/tool names use stable SHA-256 tags; owner IDs, resource IDs, request paths,
+query strings, headers, prompts, responses and document content are not logged.
+`DEBUG` adds bounded module/line frame locations without exception text, causes,
+source lines or locals. Verbosity does not enable request-body logging.
 
-</td></tr>
-</table>
+Keep Uvicorn `--no-access-log`: OAuth callback query strings contain codes. Apply
+the same restriction to proxies, and keep SDK body logging and LangSmith tracing
+disabled. The structured boundary protects application events, not arbitrary
+third-party loggers or OS diagnostics. Logs still reveal timing and operation
+metadata; protect and rotate them using local host controls.
 
-<br/>
+## Remaining limitations and manual acceptance
 
-## 🔐 A Note on Secrets
+SQLite stores assume one trusted host and clock. Connector secrets are not an
+encrypted persistent vault. A cancelled request cannot undo an external action
+already dispatched. History/checkpoints/provider effects cannot share one atomic
+transaction. Revisions and memory lack lifetime retention quotas and pagination.
+Runtime files and backups require OS access controls; no encryption at rest is
+added here. Semantic prompt injection remains a model risk even when roles,
+authorization, read-only tool filtering and source handling are enforced.
 
-Clawbit keeps its secrets where they belong — in `.env`, never in Git.
-
-- ✅ `.env` is listed in `.gitignore` and has never been committed — checked across full history
-- 🔁 Rotate any key immediately if it's ever exposed, no exceptions
-- 🔍 When in doubt: `git log -p | grep -i key` before you push
-
-<br/>
-
-## 🛣️ Roadmap
-
-- [ ] Hatch `agent.py` — define the LangGraph nodes & routing logic
-- [ ] Build the ingestion pipeline in `rag.py`
-- [ ] Register real tools inside `tool.py`
-- [ ] Wire up persistence in `database.py`
-- [ ] Design the front end in `templates/index.html`
-- [ ] Add tests, CI, and a Dockerfile for one-command deploys
-
-<br/>
-
-## 🤝 Contributing
-
-Found a bug? Have an idea that would make Clawbit sharper? Open an [issue](https://github.com/hassankadri/Clawbit/issues) or send a pull request — every contribution helps this thing grow.
-
-<br/>
-
-<div align="center">
-
-**Built with curiosity, caffeine, and a healthy respect for `.gitignore`.**
-
-📄 Licensed under the terms in [LICENSE](./LICENSE)
-
-<sub>⭐ If Clawbit's approach to agent design is useful to you, consider starring the repo.</sub>
-
-</div>
+After offline acceptance, follow the [deferred manual checklist](docs/BATCH_8_FINAL_AUDIT.md#deferred-manual-verification):
+existing-owner login/logout, old-data preservation, explicit browser import,
+stream/cancel/edit/retry, source access, memory scopes, connector reconnect/OAuth,
+free-model availability and separately authorized live inference. Do not repeat
+owner initialization or the completed legacy claim.

@@ -1,20 +1,28 @@
 import base64
+import asyncio
 import json
-from contextlib import asynccontextmanager
-from pathlib import Path
+from contextlib import aclosing, asynccontextmanager
 from typing import Literal
 from urllib.parse import urlencode
 import uuid
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from pydantic import BaseModel, Field
 
 import groq
 from google.genai import errors as google_genai_errors
 
 from agent import close_agent_resources, get_agent
+from auth import install_authentication
+from chat_execution import (
+    ChatStreamingResponse,
+    claim_thread_execution,
+)
+from models import (MODEL_CONFIGS, ModelError, model_catalog, normalize_model_name,
+                    ensure_model_available, require_consent, provider_error)
 
 from mcp_client import (
     connect_github_mcp,
@@ -33,38 +41,27 @@ from mcp_client import (
 from mcp_oauth import (
     complete_google_drive_oauth,
     complete_slack_oauth,
+    discard_oauth_state,
     get_frontend_url,
     start_google_drive_oauth,
     start_slack_oauth,
 )
 
 from rag import (
-    SUPPORTED_DOCUMENT_SUFFIXES,
-    SUPPORTED_IMAGE_SUFFIXES,
+    delete_attachment,
     get_attachment_records,
-    save_uploaded_file,
+    read_attachment_bytes,
+    receive_uploaded_file,
 )
-
-
-# =========================================================
-# UPLOAD CONFIG
-# =========================================================
-
-SUPPORTED_UPLOAD_SUFFIXES = (
-    SUPPORTED_DOCUMENT_SUFFIXES
-    | SUPPORTED_IMAGE_SUFFIXES
-)
-
-UPLOAD_SUFFIX_BY_MIME = {
-    "application/pdf": ".pdf",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
-    "text/plain": ".txt",
-    "text/markdown": ".md",
-    "text/csv": ".csv",
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/webp": ".webp",
-}
+from upload_security import UploadBodyLimitMiddleware, UploadError, validate_thread_id
+from ownership import OwnershipError, bind_resources, require_thread
+from usage_limits import UsageLimitError
+from history_api import router as history_router
+from history_store import HistoryError
+from knowledge_api import router as knowledge_router
+from memory_store import MemoryError
+from evidence import resolve_answer, source_snapshot
+from observability import RequestLoggingMiddleware, configure_logging, event
 
 
 # =========================================================
@@ -90,33 +87,59 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(UploadBodyLimitMiddleware)
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(request: Request, exc: RequestValidationError):
+    if request.url.path.startswith("/mcp/"):
+        # Pydantic errors otherwise echo the rejected credential or callback input.
+        return JSONResponse(status_code=422, content={"detail": "Invalid connector request."})
+    return await request_validation_exception_handler(request, exc)
+
+
+@app.exception_handler(ModelError)
+@app.exception_handler(UsageLimitError)
+async def model_error_handler(request: Request, exc: ModelError | UsageLimitError):
+    event("provider", "rate_limited" if exc.status_code == 429 else "failed",
+          status_code=exc.status_code, category="unavailable")
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after is not None else {}
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)}, headers=headers)
+
+
+@app.get("/models")
+def available_models():
+    return {"models": model_catalog()}
+
+
+@app.exception_handler(UploadError)
+async def attachment_error_handler(request, exc: UploadError):
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
+
+@app.exception_handler(OwnershipError)
+async def ownership_error_handler(request, exc: OwnershipError):
+    event("authorization", "denied", status_code=exc.status_code, category="ownership")
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+
 
 # =========================================================
 # CORS
 # =========================================================
 
-app.add_middleware(
-    CORSMiddleware,
+install_authentication(app)
+configure_logging()
+app.add_middleware(RequestLoggingMiddleware)
+app.include_router(history_router)
+app.include_router(knowledge_router)
 
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
 
-    allow_origin_regex=(
-        r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$"
-    ),
-
-    allow_credentials=True,
-
-    allow_methods=[
-        "*",
-    ],
-
-    allow_headers=[
-        "*",
-    ],
-)
+@app.exception_handler(MemoryError)
+@app.exception_handler(HistoryError)
+async def history_error_handler(request: Request, exc: HistoryError | MemoryError):
+    event("memory" if isinstance(exc, MemoryError) else "history", "failed",
+          error=exc, status_code=exc.status_code, category="persistence")
+    return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
 
 # =========================================================
@@ -127,6 +150,14 @@ class ChatRequest(
     BaseModel,
 ):
     message: str
+    request_id: str | None = Field(default=None, min_length=1, max_length=128)
+    user_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    assistant_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    expected_version: int | None = Field(default=None, ge=0)
+    operation: Literal["send", "edit", "retry", "regenerate"] = "send"
+    target_message_id: str | None = Field(default=None, min_length=1, max_length=128)
+    checkpoint_id: str | None = Field(default=None, max_length=128)
+    provider_consent: str | None = Field(default=None, max_length=160)
 
     model: str = (
         "gemini-3.1-flash-lite"
@@ -304,7 +335,7 @@ def extract_text_content(
                     "text",
                 )
 
-                if text:
+                if isinstance(text, str) and item.get("type") in {"text", "output_text"}:
                     parts.append(
                         text,
                     )
@@ -321,21 +352,13 @@ def extract_text_content(
             parts,
         )
 
-    return str(
-        content,
-    )
+    return ""
 
 
 def _is_vision_model(
     model_name: str,
 ) -> bool:
-    return (
-        model_name
-        .lower()
-        .startswith(
-            "gemini",
-        )
-    )
+    return MODEL_CONFIGS[normalize_model_name(model_name)]["capabilities"]["vision"]
 
 
 def _build_user_message(
@@ -434,11 +457,7 @@ def _build_user_message(
         if not _is_vision_model(
             model_name,
         ):
-            continue
-
-        path = Path(
-            path_value,
-        )
+            raise ModelError("The selected model does not support image understanding.")
 
         mime_type = (
             attachment.get(
@@ -455,7 +474,7 @@ def _build_user_message(
                 "base64":
                     base64
                     .b64encode(
-                        path.read_bytes()
+                        read_attachment_bytes(attachment)
                     )
                     .decode(
                         "utf-8"
@@ -587,6 +606,8 @@ def _exception_chain(
 def _provider_error_message(
     exc: Exception,
 ) -> str:
+    if isinstance(exc, ModelError):
+        return str(exc)
     for current in _exception_chain(
         exc
     ):
@@ -973,134 +994,73 @@ async def mcp_disconnect_stripe():
 # GOOGLE DRIVE MCP
 # =========================================================
 
-@app.get(
-    "/mcp/connect/google-drive",
-)
-def mcp_connect_google_drive():
-    try:
-        return (
-            start_google_drive_oauth()
-        )
+async def _complete_connector_oauth(
+    request: Request,
+    provider: str,
+    code: str | None,
+    state: str | None,
+    error: str | None,
+) -> RedirectResponse:
+    """Complete a session-bound connection without reflecting provider secrets."""
+    status = "error"
+    frontend_url = get_frontend_url()
+    token = request.cookies.get(request.app.state.auth_settings.cookie_name, "")
+    complete = (
+        complete_google_drive_oauth if provider == "google-drive" else complete_slack_oauth
+    )
+    if code and state and not error:
+        try:
+            result = await complete(
+                code=code,
+                state=state,
+                session_id=request.state.auth_session.token_hash,
+                validate_session=lambda: (
+                    request.app.state.auth_store.lookup(token) == request.state.auth_session
+                ),
+            )
+            frontend_url = result["frontend_url"]
+            status = "connected"
+            try:
+                await refresh_mcp_tools()
+            except Exception:
+                # Credentials remain connected; the owner can retry tool discovery.
+                pass
+        except Exception:
+            # OAuth provider errors can contain codes or credentials. Never reflect them.
+            pass
+    elif state:
+        discard_oauth_state(state, provider, request.state.auth_session.token_hash)
+    query = {"mcp": provider, "status": status}
+    if status == "error":
+        query["error"] = "Connection could not be completed. Start again from Clawbit."
+    return RedirectResponse(f"{frontend_url}?{urlencode(query)}")
 
-    except Exception as exc:
+
+@app.post("/mcp/connect/google-drive")
+def mcp_connect_google_drive(request: Request) -> dict:
+    try:
+        return start_google_drive_oauth(
+            request.state.auth_session.token_hash,
+            backend_url=str(request.base_url).rstrip("/"),
+            frontend_url=request.headers["origin"],
+        )
+    except UsageLimitError:
+        raise
+    except Exception:
         raise HTTPException(
             status_code=400,
-
-            detail=str(
-                exc
-            ),
-        ) from exc
+            detail="Could not start connector authorization. Check server configuration.",
+        ) from None
 
 
-@app.get(
-    "/mcp/oauth/google-drive/callback",
-)
+@app.get("/mcp/oauth/google-drive/callback")
 async def mcp_google_drive_callback(
+    request: Request,
     code: str | None = None,
-
     state: str | None = None,
-
     error: str | None = None,
-):
-    frontend_url = (
-        get_frontend_url()
-    )
-
-    if error:
-        query = urlencode(
-            {
-                "mcp":
-                    "google-drive",
-
-                "status":
-                    "error",
-
-                "error":
-                    error,
-            }
-        )
-
-        return RedirectResponse(
-            url=(
-                f"{frontend_url}"
-                f"?{query}"
-            )
-        )
-
-    if (
-        not code
-        or not state
-    ):
-        query = urlencode(
-            {
-                "mcp":
-                    "google-drive",
-
-                "status":
-                    "error",
-
-                "error": (
-                    "Google Drive OAuth callback "
-                    "was missing code or state."
-                ),
-            }
-        )
-
-        return RedirectResponse(
-            url=(
-                f"{frontend_url}"
-                f"?{query}"
-            )
-        )
-
-    try:
-        await complete_google_drive_oauth(
-            code=code,
-
-            state=state,
-        )
-
-        try:
-            await refresh_mcp_tools()
-
-        except Exception as refresh_exc:
-            print(
-                "Google Drive MCP refresh error: "
-                f"{refresh_exc}"
-            )
-
-        query = urlencode(
-            {
-                "mcp":
-                    "google-drive",
-
-                "status":
-                    "connected",
-            }
-        )
-
-    except Exception as exc:
-        query = urlencode(
-            {
-                "mcp":
-                    "google-drive",
-
-                "status":
-                    "error",
-
-                "error":
-                    str(
-                        exc
-                    ),
-            }
-        )
-
-    return RedirectResponse(
-        url=(
-            f"{frontend_url}"
-            f"?{query}"
-        )
-    )
+) -> RedirectResponse:
+    return await _complete_connector_oauth(request, "google-drive", code, state, error)
 
 
 @app.post(
@@ -1124,134 +1084,31 @@ async def mcp_disconnect_google_drive():
 # SLACK MCP
 # =========================================================
 
-@app.get(
-    "/mcp/connect/slack",
-)
-def mcp_connect_slack():
+@app.post("/mcp/connect/slack")
+def mcp_connect_slack(request: Request) -> dict:
     try:
-        return (
-            start_slack_oauth()
+        return start_slack_oauth(
+            request.state.auth_session.token_hash,
+            backend_url=str(request.base_url).rstrip("/"),
+            frontend_url=request.headers["origin"],
         )
-
-    except Exception as exc:
+    except UsageLimitError:
+        raise
+    except Exception:
         raise HTTPException(
             status_code=400,
-
-            detail=str(
-                exc
-            ),
-        ) from exc
+            detail="Could not start connector authorization. Check server configuration.",
+        ) from None
 
 
-@app.get(
-    "/mcp/oauth/slack/callback",
-)
+@app.get("/mcp/oauth/slack/callback")
 async def mcp_slack_callback(
+    request: Request,
     code: str | None = None,
-
     state: str | None = None,
-
     error: str | None = None,
-):
-    frontend_url = (
-        get_frontend_url()
-    )
-
-    if error:
-        query = urlencode(
-            {
-                "mcp":
-                    "slack",
-
-                "status":
-                    "error",
-
-                "error":
-                    error,
-            }
-        )
-
-        return RedirectResponse(
-            url=(
-                f"{frontend_url}"
-                f"?{query}"
-            )
-        )
-
-    if (
-        not code
-        or not state
-    ):
-        query = urlencode(
-            {
-                "mcp":
-                    "slack",
-
-                "status":
-                    "error",
-
-                "error": (
-                    "Slack OAuth callback "
-                    "was missing code or state."
-                ),
-            }
-        )
-
-        return RedirectResponse(
-            url=(
-                f"{frontend_url}"
-                f"?{query}"
-            )
-        )
-
-    try:
-        await complete_slack_oauth(
-            code=code,
-
-            state=state,
-        )
-
-        try:
-            await refresh_mcp_tools()
-
-        except Exception as refresh_exc:
-            print(
-                "Slack MCP refresh error: "
-                f"{refresh_exc}"
-            )
-
-        query = urlencode(
-            {
-                "mcp":
-                    "slack",
-
-                "status":
-                    "connected",
-            }
-        )
-
-    except Exception as exc:
-        query = urlencode(
-            {
-                "mcp":
-                    "slack",
-
-                "status":
-                    "error",
-
-                "error":
-                    str(
-                        exc
-                    ),
-            }
-        )
-
-    return RedirectResponse(
-        url=(
-            f"{frontend_url}"
-            f"?{query}"
-        )
-    )
+) -> RedirectResponse:
+    return await _complete_connector_oauth(request, "slack", code, state, error)
 
 
 @app.post(
@@ -1283,142 +1140,22 @@ async def mcp_disconnect_slack():
 )
 async def upload_attachment(
     thread_id: str = Form(
-        ...
+        ""
     ),
 
     file: UploadFile = File(
         ...
     ),
 ):
-    suffix = (
-        Path(
-            file.filename
-            or ""
-        )
-        .suffix
-        .lower()
-    )
-
-    if (
-        suffix
-        not in
-        SUPPORTED_UPLOAD_SUFFIXES
-    ):
-        suffix = (
-            UPLOAD_SUFFIX_BY_MIME
-            .get(
-                (
-                    file.content_type
-                    or ""
-                )
-                .lower(),
-
-                "",
-            )
-        )
-
-    if (
-        suffix
-        not in
-        SUPPORTED_UPLOAD_SUFFIXES
-    ):
-        raise HTTPException(
-            status_code=400,
-
-            detail=(
-                "Unsupported file type. "
-                "Upload PDF, DOCX, TXT, MD, CSV, or images."
-            ),
-        )
-
-    upload_dir = (
-        Path(
-            __file__
-        )
-        .resolve()
-        .parent
-
-        / "uploads"
-
-        / thread_id
-    )
-
-    upload_dir.mkdir(
-        parents=True,
-
-        exist_ok=True,
-    )
-
-    safe_name = (
-        Path(
-            file.filename
-            or "upload"
-        )
-        .name
-    )
-
-    if (
-        Path(
-            safe_name
-        )
-        .suffix
-        .lower()
-
-        not in
-        SUPPORTED_UPLOAD_SUFFIXES
-
-        and suffix
-    ):
-        safe_name = (
-            f"{Path(safe_name).stem}"
-            f"{suffix}"
-        )
-
-    attachment_path = (
-        upload_dir
-
-        / (
-            f"{uuid.uuid4().hex}_"
-            f"{safe_name}"
-        )
-    )
-
-    content = (
-        await file.read()
-    )
-
-    attachment_path.write_bytes(
-        content
-    )
-
+    require_thread(thread_id, create=True)
     try:
-        record = save_uploaded_file(
-            str(
-                attachment_path
-            ),
-
-            thread_id=
-                thread_id,
-
-            original_name=(
-                file.filename
-                or attachment_path.name
-            ),
-        )
-
+        record = await receive_uploaded_file(file, thread_id)
+    except (UploadError, UsageLimitError):
+        raise
     except Exception as exc:
-        if attachment_path.exists():
-            attachment_path.unlink(
-                missing_ok=True,
-            )
-
-        raise HTTPException(
-            status_code=400,
-
-            detail=str(
-                exc
-            ),
-        ) from exc
+        raise HTTPException(status_code=503, detail="The upload could not be saved. Please retry.") from exc
+    finally:
+        await file.close()
 
     return UploadResponse(
         attachment_id=
@@ -1453,6 +1190,13 @@ async def upload_attachment(
     )
 
 
+@app.delete("/attachments/{thread_id}/{attachment_id}")
+async def remove_stored_attachment(thread_id: str, attachment_id: str):
+    if not delete_attachment(thread_id, attachment_id):
+        raise HTTPException(status_code=404, detail="Attachment not found.")
+    return {"deleted": True}
+
+
 # =========================================================
 # NORMAL CHAT
 # =========================================================
@@ -1466,17 +1210,23 @@ async def upload_attachment(
 async def chat(
     req: ChatRequest,
 ):
-    thread_id = (
-        req.thread_id
-        or str(
-            uuid.uuid4()
-        )
-    )
+    if req.request_id is not None:
+        from history_chat import persistent_chat
+        return await persistent_chat(req, streaming=False)
+    if req.operation != "send":
+        raise HistoryError("Edit and retry require a persisted conversation.", 422)
+    req.model = normalize_model_name(req.model)
+    require_consent(req.model, req.provider_consent)
+    await asyncio.to_thread(ensure_model_available, req.model)
+    thread_id = validate_thread_id(req.thread_id if req.thread_id is not None else str(uuid.uuid4()))
 
     workspace_id = (
         req.workspace_id
         or thread_id
     )
+
+    bind_resources(thread_id, workspace_id)
+    claim_thread_execution(thread_id)
 
     attachment_ids = (
         req.attachment_ids
@@ -1537,13 +1287,7 @@ async def chat(
         req.mode,
     )
 
-    print(
-        "Agent loaded successfully"
-    )
-
-    print(
-        "Calling agent.ainvoke..."
-    )
+    event("research" if req.mode == "research" else "chat", "started", mode=req.mode)
 
     user_message = {
         "role":
@@ -1560,7 +1304,9 @@ async def chat(
     }
 
     config = {
+        "recursion_limit": 28 if req.mode == "research" else 24,
         "configurable": {
+            "provider_consent": req.provider_consent,
             "thread_id":
                 thread_id,
 
@@ -1603,25 +1349,7 @@ async def chat(
         )
 
     except Exception as exc:
-        print(
-            "Chat provider error: "
-            f"{type(exc).__name__}: "
-            f"{exc}"
-        )
-
-        return ChatResponse(
-            response=(
-                _provider_error_message(
-                    exc
-                )
-            ),
-
-            thread_id=
-                thread_id,
-
-            inspector=
-                inspector,
-        )
+        raise provider_error(exc) from None
 
     if isinstance(
         result,
@@ -1658,6 +1386,7 @@ async def chat(
             )
         )
 
+    resolve_answer(response, inspector, research=req.mode == "research")
     return ChatResponse(
         response=
             response,
@@ -1680,17 +1409,23 @@ async def chat(
 async def chat_stream(
     req: ChatRequest,
 ):
-    thread_id = (
-        req.thread_id
-        or str(
-            uuid.uuid4()
-        )
-    )
+    if req.request_id is not None:
+        from history_chat import persistent_chat
+        return await persistent_chat(req, streaming=True)
+    if req.operation != "send":
+        raise HistoryError("Edit and retry require a persisted conversation.", 422)
+    req.model = normalize_model_name(req.model)
+    require_consent(req.model, req.provider_consent)
+    await asyncio.to_thread(ensure_model_available, req.model)
+    thread_id = validate_thread_id(req.thread_id if req.thread_id is not None else str(uuid.uuid4()))
 
     workspace_id = (
         req.workspace_id
         or thread_id
     )
+
+    bind_resources(thread_id, workspace_id)
+    claim_thread_execution(thread_id)
 
     attachment_ids = (
         req.attachment_ids
@@ -1747,7 +1482,7 @@ async def chat_stream(
                 },
             )
 
-        return StreamingResponse(
+        return ChatStreamingResponse(
             vision_error_stream(),
 
             media_type=
@@ -1788,7 +1523,9 @@ async def chat_stream(
     }
 
     config = {
+        "recursion_limit": 28 if req.mode == "research" else 24,
         "configurable": {
+            "provider_consent": req.provider_consent,
             "thread_id":
                 thread_id,
 
@@ -1818,125 +1555,70 @@ async def chat_stream(
     }
 
     async def event_stream():
+        sent_text = False
+        answer_text = ""
+        sent_sources = []
+        final_message = None
+        streamed_ids = set()
         try:
-            yield _sse_event(
-                "start",
-
-                {
-                    "thread_id":
-                        thread_id,
-                },
+            yield _sse_event("start", {"thread_id": thread_id})
+            stream = agent.astream(
+                {"messages": [user_message]},
+                config=config,
+                stream_mode=["messages", "values"],
             )
+            # Close LangGraph before releasing this request's thread/concurrency leases.
+            async with aclosing(stream):
+                async for stream_mode, chunk in stream:
+                    sources = source_snapshot()
+                    if sources != sent_sources:
+                        sent_sources = sources
+                        yield _sse_event("sources", {"sources": sources})
+                    if stream_mode == "messages":
+                        message_chunk, metadata = chunk
+                        if metadata.get("langgraph_node") != "chatbot":
+                            continue
+                        text = extract_text_content(message_chunk)
+                        if text:
+                            sent_text = True
+                            answer_text += text
+                            if getattr(message_chunk, "id", None):
+                                streamed_ids.add(message_chunk.id)
+                            yield _sse_event("token", {"text": text})
+                    elif stream_mode == "values" and isinstance(chunk, dict):
+                        messages = chunk.get("messages", [])
+                        _update_inspector_from_messages(inspector, messages)
+                        if (
+                            messages
+                            and getattr(messages[-1], "type", None) == "ai"
+                            and not getattr(messages[-1], "tool_calls", [])
+                        ):
+                            final_message = messages[-1]
 
-            async for (
-                stream_mode,
-                chunk,
-            ) in agent.astream(
-                {
-                    "messages": [
-                        user_message
-                    ],
-                },
-
-                config=
-                    config,
-
-                stream_mode=[
-                    "messages",
-                    "values",
-                ],
+            # Keep the existing final-only provider fallback without replaying deltas.
+            if final_message is not None and (
+                not sent_text
+                or (final_message.id and final_message.id not in streamed_ids)
             ):
-                if (
-                    stream_mode
-                    == "messages"
-                ):
-                    (
-                        message_chunk,
-                        metadata,
-                    ) = chunk
-
-                    if (
-                        metadata.get(
-                            "langgraph_node"
-                        )
-                        != "chatbot"
-                    ):
-                        continue
-
-                    text = (
-                        extract_text_content(
-                            message_chunk
-                        )
-                    )
-
-                    if text:
-                        yield _sse_event(
-                            "token",
-
-                            {
-                                "text":
-                                    text,
-                            },
-                        )
-
-                elif (
-                    stream_mode
-                    == "values"
-                ):
-                    if not isinstance(
-                        chunk,
-                        dict,
-                    ):
-                        continue
-
-                    messages = (
-                        chunk.get(
-                            "messages",
-
-                            [],
-                        )
-                    )
-
-                    _update_inspector_from_messages(
-                        inspector,
-
-                        messages,
-                    )
-
-            yield _sse_event(
-                "done",
-
-                {
-                    "thread_id":
-                        thread_id,
-
-                    "inspector":
-                        inspector,
-                },
-            )
-
+                final_text = extract_text_content(final_message)
+                if final_text:
+                    sent_text = True
+                    answer_text += final_text
+                    yield _sse_event("token", {"text": final_text})
+            if not sent_text:
+                raise ModelError("The provider returned no answer text. Please retry.", 502)
+            resolve_answer(answer_text, inspector, research=req.mode == "research")
+            yield _sse_event("done", {"thread_id": thread_id, "inspector": inspector})
         except Exception as exc:
-            print(
-                "Streaming provider error: "
-                f"{type(exc).__name__}: "
-                f"{exc}"
-            )
+            error = provider_error(exc)
+            yield _sse_event("error", {
+                "message": _provider_error_message(error),
+                "status_code": error.status_code,
+                "retry_after": error.retry_after,
+                "thread_id": thread_id,
+            })
 
-            yield _sse_event(
-                "error",
-
-                {
-                    "message":
-                        _provider_error_message(
-                            exc
-                        ),
-
-                    "thread_id":
-                        thread_id,
-                },
-            )
-
-    return StreamingResponse(
+    return ChatStreamingResponse(
         event_stream(),
 
         media_type=

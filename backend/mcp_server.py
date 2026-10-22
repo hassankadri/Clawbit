@@ -1,15 +1,28 @@
+"""Read-only local diagnostics over MCP stdio; no application stores are opened."""
+
+from importlib.metadata import PackageNotFoundError, version
+
 from mcp.server.fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 
 mcp = FastMCP("Clawbit MCP")
 
 
-@mcp.tool()
-def get_project_status() -> str:
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False))
+def get_project_status() -> dict:
+    """Report installed backend component versions, not provider health.
+
+    The fixed package allowlist avoids exposing environment values, filesystem
+    paths, user records or arbitrary package inventories.
     """
-    Return the current status of the Clawbit project.
-    """
-    return "Clawbit MCP connection is working successfully."
+    packages = {}
+    for name in ("fastapi", "langgraph", "mcp", "langchain-mcp-adapters"):
+        try:
+            packages[name] = version(name)
+        except PackageNotFoundError:
+            packages[name] = None
+    return {"project": "Clawbit", "transport": "stdio", "packages": packages}
 
 
 if __name__ == "__main__":

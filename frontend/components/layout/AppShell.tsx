@@ -29,6 +29,7 @@ import Topbar, {
 import Welcome from "@/components/layout/Welcome";
 import WorkspacePanel from "@/components/layout/WorkspacePanel";
 
+import MemoryPanel from "@/components/settings/MemoryPanel";
 import SettingsWorkspace from "@/components/settings/SettingsWorkspace";
 
 import LibraryWorkspace from "@/components/library/LibraryWorkspace";
@@ -59,6 +60,13 @@ import {
 
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
+import { getAuthState } from "@/lib/auth";
+import {
+  listHistory, loadHistory, updateHistory, deleteHistory, historySnapshot,
+  importLegacyConversation, type ConversationRecord, type LegacyConversation,
+  listRevisions, loadRevision, type RevisionRecord,
+  isLegacyConversation, parseLegacyArray, selectSavedConversation,
+} from "@/lib/history";
 
 /* ====================================================== */
 /* TYPES                                                  */
@@ -116,6 +124,24 @@ interface ProjectRecord {
 
   files:
     ProjectFile[];
+}
+
+function isSavedConversation(value: unknown): value is ConversationSummary {
+  return isLegacyConversation(value)
+    && typeof (value as ConversationSummary).preview === "string";
+}
+
+function isSavedProject(value: unknown): value is ProjectRecord {
+  if (!value || typeof value !== "object") return false;
+  const project = value as Partial<ProjectRecord>;
+  return typeof project.id === "string" && typeof project.name === "string"
+    && typeof project.description === "string"
+    && (project.visibility === "created" || project.visibility === "shared")
+    && typeof project.createdAt === "number" && typeof project.updatedAt === "number"
+    && Array.isArray(project.conversations) && project.conversations.every(isSavedConversation)
+    && Array.isArray(project.files) && project.files.every((file) => file
+      && typeof file.id === "string" && typeof file.name === "string"
+      && typeof file.mimeType === "string" && typeof file.size === "number");
 }
 
 interface ComposerAttachment {
@@ -344,7 +370,20 @@ export default function AppShell({
     retryAssistantMessage,
     stopGeneration,
     threadId,
-  } = useChat();
+    historyError,
+    historyLoading,
+  } = useChat({ persistent: true });
+
+  const [historyNotice, setHistoryNotice] = useState("");
+  const [serverHistoryLoading, setServerHistoryLoading] = useState(true);
+  const [importingHistory, setImportingHistory] = useState(false);
+  const legacyHistoryRef = useRef<LegacyConversation[]>([]);
+  const restoredSelectionRef = useRef<string | null>(null);
+  const historyRefreshRef = useRef<() => void>(() => {});
+  const [revisionThread, setRevisionThread] = useState<string | null>(null);
+  const [savedRevisions, setSavedRevisions] = useState<RevisionRecord[]>([]);
+  const [revisionText, setRevisionText] = useState("");
+  const revisionSelectionRef = useRef(0);
 
   const {
     resolvedTheme,
@@ -441,7 +480,7 @@ export default function AppShell({
     setActiveConversationId,
   ] =
     useState<string>(
-      "initial-conversation",
+      () => crypto.randomUUID(),
     );
 
   const [
@@ -513,6 +552,104 @@ export default function AppShell({
     useRef(
       restoreSnapshot,
     );
+  const createSnapshotRef = useRef(createSnapshot);
+  useEffect(() => { createSnapshotRef.current = createSnapshot; }, [createSnapshot]);
+
+  useEffect(() => {
+    let disposed = false;
+    let controller: AbortController | undefined;
+    const summary = (record: ConversationRecord): ConversationSummary => ({
+      id: record.id, title: record.title, preview: record.preview ?? "", pinned: record.pinned,
+      updatedAt: record.updatedAt, snapshot: historySnapshot(record),
+    });
+    async function refresh() {
+      controller?.abort();
+      controller = new AbortController();
+      const current = controller;
+      try {
+        const result = await listHistory(current.signal);
+        if (disposed || current.signal.aborted) return;
+        const serverThreads = new Set(result.conversations.map((item) => item.thread_id));
+        const deleted = new Set(result.deleted_threads);
+        setConversationHistory((local) => [
+          ...result.conversations.map(summary),
+          ...local.filter((item) => !serverThreads.has(item.snapshot.threadId)
+            && !deleted.has(item.snapshot.threadId) && !item.snapshot.serverPersisted),
+        ]);
+        setProjects((local) => local.map((project) => ({
+          ...project,
+          conversations: [
+            ...result.conversations.filter((item) => item.workspace_id === project.id).map(summary),
+            ...project.conversations.filter((item) => !serverThreads.has(item.snapshot.threadId)
+              && !deleted.has(item.snapshot.threadId) && !item.snapshot.serverPersisted),
+          ],
+        })));
+      } catch (error) {
+        if (!disposed && !current.signal.aborted) {
+          setHistoryNotice(error instanceof Error ? error.message : "Could not load server history.");
+        }
+      } finally {
+        if (!disposed && !current.signal.aborted) setServerHistoryLoading(false);
+      }
+    }
+    historyRefreshRef.current = () => { void refresh(); };
+    const refreshListener = () => { void refresh(); };
+    window.addEventListener("clawbit-history-updated", refreshListener);
+    void refresh();
+    return () => {
+      disposed = true;
+      controller?.abort();
+      window.removeEventListener("clawbit-history-updated", refreshListener);
+    };
+  }, []);
+
+  async function importBrowserHistory() {
+    const principal = getAuthState().user?.principal_id;
+    if (!principal || importingHistory || loading) return;
+    if (!window.confirm("Import this browser’s saved conversations into your signed-in account? Existing server conversations will not be overwritten, and the original browser data will remain.")) return;
+    setHistoryNotice("");
+    setImportingHistory(true);
+    const failures: string[] = [];
+    try {
+      for (const item of new Map(legacyHistoryRef.current.map((record) => [record.snapshot.threadId, record])).values()) {
+        try {
+          const saved = await importLegacyConversation(item, principal);
+          if (saved.thread_id === createSnapshotRef.current().threadId) restoreSnapshot(historySnapshot(saved));
+        } catch {
+          failures.push(item.title);
+        }
+      }
+      historyRefreshRef.current();
+    } finally {
+      setImportingHistory(false);
+      if (failures.length) setHistoryNotice(`${failures.length} conversations could not be imported because of a conflict or invalid data. Original browser history is unchanged.`);
+    }
+  }
+
+  async function openRevisions() {
+    const selection = ++revisionSelectionRef.current;
+    try {
+      const result = await listRevisions(threadId);
+      if (selection !== revisionSelectionRef.current) return;
+      setSavedRevisions(result.revisions);
+      setRevisionText("");
+      setRevisionThread(threadId);
+    } catch (error) {
+      setHistoryNotice(error instanceof Error ? error.message : "Could not load saved revisions.");
+    }
+  }
+
+  async function viewRevision(revisionId: string) {
+    if (!revisionThread) return;
+    const selection = ++revisionSelectionRef.current;
+    try {
+      const revision = await loadRevision(revisionThread, revisionId);
+      if (selection !== revisionSelectionRef.current) return;
+      setRevisionText(revision.messages.map((message) => `${message.role} (${message.status ?? "complete"})\n${message.content}`).join("\n\n"));
+    } catch (error) {
+      if (selection === revisionSelectionRef.current) setRevisionText(error instanceof Error ? error.message : "Could not load this revision.");
+    }
+  }
 
   const settingsRef =
     useRef<AppSettings>(
@@ -945,37 +1082,19 @@ export default function AppShell({
 
   useEffect(() => {
     try {
-      const rawProjects =
-        window.localStorage.getItem(
-          projectStorageKey,
-        );
+      const rawProjects = window.localStorage.getItem("clawbit.projects.v2")
+        ?? window.localStorage.getItem(projectStorageKey);
 
       const rawActiveProject =
         window.localStorage.getItem(
           activeProjectStorageKey,
         );
 
-      queueMicrotask(
-        () => {
-          let parsedProjects:
-            ProjectRecord[] =
-            [];
-
-          if (
-            rawProjects
-          ) {
-            const parsed =
-              JSON.parse(
-                rawProjects,
-              ) as ProjectRecord[];
-
-            parsedProjects =
-              Array.isArray(
-                parsed,
-              )
-                ? parsed
-                : [];
-
+      const parsedProjects = parseLegacyArray(rawProjects, isSavedProject);
+      queueMicrotask(() => {
+          if (rawProjects) {
+            legacyHistoryRef.current.push(...parsedProjects.flatMap((project) =>
+              project.conversations.filter((item) => !item.snapshot.serverPersisted).map((item) => ({ ...item, workspaceId: project.id }))));
             setProjects(
               parsedProjects,
             );
@@ -1001,20 +1120,9 @@ export default function AppShell({
         },
       );
     } catch {
-      queueMicrotask(
-        () => {
-          setProjects(
-            [],
-          );
-
-          setActiveProjectId(
-            null,
-          );
-
-          projectsHydratedRef.current =
-            true;
-        },
-      );
+      queueMicrotask(() => {
+        setHistoryNotice("Browser project history could not be read. Original data is retained; local project saving is paused.");
+      });
     }
   }, []);
 
@@ -1034,62 +1142,26 @@ export default function AppShell({
           activeConversationStorageKey,
         );
 
-      queueMicrotask(
-        () => {
-          let parsedConversations:
-            ConversationSummary[] =
-            [];
-
-          if (
-            rawConversations
-          ) {
-            const parsed =
-              JSON.parse(
-                rawConversations,
-              ) as ConversationSummary[];
-
-            parsedConversations =
-              Array.isArray(
-                parsed,
-              )
-                ? parsed
-                : [];
-
+      const parsedConversations = parseLegacyArray(rawConversations, isSavedConversation);
+      queueMicrotask(() => {
+          if (rawConversations) {
+            legacyHistoryRef.current.push(...parsedConversations.map((item) => ({ ...item })));
             setConversationHistory(
               parsedConversations,
             );
           }
 
-          if (
-            rawActiveConversation &&
-            parsedConversations.some(
-              (
-                item,
-              ) =>
-                item.id ===
-                rawActiveConversation,
-            )
-          ) {
-            setActiveConversationId(
-              rawActiveConversation,
-            );
-          }
+          if (rawActiveConversation) setActiveConversationId(rawActiveConversation);
 
           conversationsHydratedRef.current =
             true;
         },
       );
     } catch {
-      queueMicrotask(
-        () => {
-          setConversationHistory(
-            [],
-          );
-
-          conversationsHydratedRef.current =
-            true;
-        },
-      );
+      queueMicrotask(() => {
+        setHistoryNotice("Browser conversation history could not be read. Original data is retained.");
+        conversationsHydratedRef.current = true;
+      });
     }
   }, []);
 
@@ -1154,7 +1226,7 @@ export default function AppShell({
 
     try {
       window.localStorage.setItem(
-        projectStorageKey,
+        "clawbit.projects.v2",
         JSON.stringify(
           projects,
         ),
@@ -1197,26 +1269,7 @@ export default function AppShell({
   /* SAVE CONVERSATIONS                                   */
   /* ==================================================== */
 
-  useEffect(() => {
-    if (
-      !conversationsHydratedRef.current
-    ) {
-      return;
-    }
-
-    try {
-      window.localStorage.setItem(
-        conversationStorageKey,
-        JSON.stringify(
-          conversationHistory,
-        ),
-      );
-    } catch {
-      // Storage unavailable.
-    }
-  }, [
-    conversationHistory,
-  ]);
+  // Legacy conversation snapshots remain untouched until an explicit import.
 
   useEffect(() => {
     if (
@@ -1267,42 +1320,20 @@ export default function AppShell({
   /* ==================================================== */
 
   useEffect(() => {
-    if (
-      !conversationsHydratedRef.current
-    ) {
-      return;
-    }
-
-    if (
-      activeProjectId ||
-      messages.length >
-        0
-    ) {
-      return;
-    }
-
-    const activeConversation =
-      conversationHistory.find(
-        (
-          item,
-        ) =>
-          item.id ===
-          activeConversationId,
-      );
-
-    if (
-      activeConversation
-    ) {
-      restoreSnapshotRef.current(
-        activeConversation.snapshot,
-      );
-    }
-  }, [
-    activeConversationId,
-    activeProjectId,
-    conversationHistory,
-    messages.length,
-  ]);
+    if (!conversationsHydratedRef.current || serverHistoryLoading || messages.length > 0) return;
+    const localProject = projects.find((item) => item.id === activeProjectId);
+    const candidates: { id: string; snapshot: ChatSnapshot }[] = activeProjectId && localProject
+      ? localProject.conversations.map((item) => ({
+          ...item, snapshot: { ...item.snapshot, workspaceId: activeProjectId },
+        }))
+      : conversationHistory;
+    const conversation = selectSavedConversation(candidates, activeConversationId, activeProjectId);
+    if (!conversation) return;
+    const selection = `${activeProjectId ?? "standalone"}:${conversation.id}`;
+    if (restoredSelectionRef.current === selection) return;
+    restoredSelectionRef.current = selection;
+    restoreSnapshotRef.current(conversation.snapshot);
+  }, [activeConversationId, activeProjectId, conversationHistory, messages.length, projects, serverHistoryLoading]);
 
   /* ==================================================== */
   /* AUTO SAVE                                            */
@@ -1319,6 +1350,7 @@ export default function AppShell({
     const snapshot:
       ChatSnapshot =
       {
+        ...createSnapshotRef.current(),
         messages,
         threadId,
         model,
@@ -1411,10 +1443,6 @@ export default function AppShell({
                       left.updatedAt
                     );
                   },
-                )
-                .slice(
-                  0,
-                  12,
                 );
             },
           );
@@ -1504,48 +1532,6 @@ export default function AppShell({
     messages.length ===
       0;
 
-  useEffect(() => {
-    if (
-      !projectsHydratedRef.current ||
-      activeView !==
-        "chats" ||
-      !activeProjectId ||
-      messages.length >
-        0
-    ) {
-      return;
-    }
-
-    const project =
-      projects.find(
-        (
-          item,
-        ) =>
-          item.id ===
-          activeProjectId,
-      );
-
-    const latestConversation =
-      project?.conversations[
-        0
-      ];
-
-    if (
-      !latestConversation
-    ) {
-      return;
-    }
-
-    restoreSnapshotRef.current(
-      latestConversation.snapshot,
-    );
-  }, [
-    activeProjectId,
-    activeView,
-    messages.length,
-    projects,
-  ]);
-
   /* ==================================================== */
   /* CHAT HELPERS                                         */
   /* ==================================================== */
@@ -1633,10 +1619,7 @@ export default function AppShell({
               item.id !==
               activeConversationId,
           ),
-        ].slice(
-          0,
-          12,
-        );
+        ];
       },
     );
   }
@@ -1756,6 +1739,7 @@ export default function AppShell({
     await sendMessage(
       message,
       attachmentIds,
+      { conversationId: activeConversationId, workspaceId: activeProjectId ?? threadId },
     );
   }
 
@@ -1809,9 +1793,8 @@ export default function AppShell({
 
     saveCurrentConversation();
 
-    setActiveProjectId(
-      null,
-    );
+    const project = projects.find((item) => item.id === conversation.snapshot.workspaceId);
+    setActiveProjectId(project?.id ?? null);
 
     restoreSnapshot(
       conversation.snapshot,
@@ -1834,198 +1817,49 @@ export default function AppShell({
   /* PIN                                                  */
   /* ==================================================== */
 
-  function toggleConversationPin(
-    id:
-      string,
-  ) {
-    setConversationHistory(
-      (
-        current,
-      ) =>
-        current.map(
-          (
-            item,
-          ) =>
-            item.id ===
-            id
-              ? {
-                  ...item,
+  async function mutateConversation(id: string, update: { title?: string; pinned?: boolean }) {
+    const item = conversationHistory.find((entry) => entry.id === id);
+    if (!item?.snapshot.serverPersisted) {
+      setHistoryNotice("Import this browser conversation before changing its saved metadata.");
+      return;
+    }
+    try {
+      const current = await loadHistory(item.snapshot.threadId);
+      const saved = await updateHistory(current, update);
+      if (saved.thread_id === createSnapshotRef.current().threadId) restoreSnapshot(historySnapshot(saved));
+      historyRefreshRef.current();
+    } catch (error) {
+      setHistoryNotice(error instanceof Error ? error.message : "Could not update history.");
+    }
+  }
 
-                  pinned:
-                    !item.pinned,
-
-                  updatedAt:
-                    Date.now(),
-                }
-              : item,
-        ),
-    );
+  function toggleConversationPin(id: string) {
+    const item = conversationHistory.find((entry) => entry.id === id);
+    if (item) void mutateConversation(id, { pinned: !item.pinned });
   }
 
   function toggleActiveChatPin() {
-    if (
-      activeProjectId ||
-      messages.length ===
-        0
-    ) {
-      return;
-    }
-
-    const snapshot:
-      ChatSnapshot =
-      {
-        messages,
-        threadId,
-        model,
-      };
-
-    const summary =
-      summarizeConversation(
-        snapshot,
-      );
-
-    setConversationHistory(
-      (
-        current,
-      ) => {
-        const existing =
-          current.find(
-            (
-              item,
-            ) =>
-              item.id ===
-              activeConversationId,
-          );
-
-        if (
-          existing
-        ) {
-          return current.map(
-            (
-              item,
-            ) =>
-              item.id ===
-              activeConversationId
-                ? {
-                    ...item,
-
-                    pinned:
-                      !item.pinned,
-
-                    updatedAt:
-                      Date.now(),
-                  }
-                : item,
-          );
-        }
-
-        return [
-          {
-            id:
-              activeConversationId,
-
-            title:
-              summary.title,
-
-            preview:
-              summary.preview,
-
-            pinned:
-              true,
-
-            snapshot,
-
-            updatedAt:
-              Date.now(),
-          },
-
-          ...current,
-        ];
-      },
-    );
+    if (!activeProjectId && !loading) toggleConversationPin(activeConversationId);
   }
 
-  function renameConversation(
-    id:
-      string,
-
-    title:
-      string,
-  ) {
-    const trimmed =
-      title.trim();
-
-    if (
-      !trimmed
-    ) {
-      return;
-    }
-
-    setConversationHistory(
-      (
-        current,
-      ) =>
-        current.map(
-          (
-            item,
-          ) =>
-            item.id ===
-            id
-              ? {
-                  ...item,
-
-                  title:
-                    trimmed,
-
-                  updatedAt:
-                    Date.now(),
-                }
-              : item,
-        ),
-    );
+  function renameConversation(id: string, title: string) {
+    if (title.trim()) void mutateConversation(id, { title: title.trim() });
   }
 
-  function deleteConversation(
-    id:
-      string,
-  ) {
-    if (
-      appSettings.confirmDestructiveActions &&
-      !window.confirm(
-        "Delete this chat?\n\nThe locally saved conversation will be removed from this browser.",
-      )
-    ) {
+  async function deleteConversation(id: string) {
+    const item = conversationHistory.find((entry) => entry.id === id);
+    if (!item?.snapshot.serverPersisted) {
+      setHistoryNotice("Import this browser conversation before deleting it from server history. The original local copy is retained.");
       return;
     }
-
-    setConversationHistory(
-      (
-        current,
-      ) =>
-        current.filter(
-          (
-            item,
-          ) =>
-            item.id !==
-            id,
-        ),
-    );
-
-    if (
-      activeConversationId ===
-      id
-    ) {
-      clearChat();
-
-      resetFreshChatDefaults();
-
-      setActiveConversationId(
-        crypto.randomUUID(),
-      );
-
-      setActiveView(
-        "chats",
-      );
+    if (appSettings.confirmDestructiveActions && !window.confirm("Delete this conversation from active history? Saved revisions, checkpoints and attachments will be retained for recovery.")) return;
+    try {
+      await deleteHistory(await loadHistory(item.snapshot.threadId));
+      if (createSnapshotRef.current().threadId === item.snapshot.threadId) clearChat();
+      setConversationHistory((current) => current.filter((entry) => entry.id !== id));
+      historyRefreshRef.current();
+    } catch (error) {
+      setHistoryNotice(error instanceof Error ? error.message : "Could not delete history.");
     }
   }
 
@@ -2045,6 +1879,7 @@ export default function AppShell({
     const snapshot:
       ChatSnapshot =
       {
+        ...createSnapshot(),
         messages,
         threadId,
         model,
@@ -2115,141 +1950,33 @@ export default function AppShell({
   /* MOVE CHAT                                            */
   /* ==================================================== */
 
-  function moveActiveChatToProject(
-    projectId:
-      string,
-  ) {
-    if (
-      activeProjectId ||
-      messages.length ===
-        0
-    ) {
+  async function moveActiveChatToProject(projectId: string) {
+    if (loading || !projects.some((project) => project.id === projectId)) return;
+    if (!createSnapshot().serverPersisted) {
+      setHistoryNotice("Import this browser conversation before moving it.");
       return;
     }
-
-    const project =
-      projects.find(
-        (
-          item,
-        ) =>
-          item.id ===
-          projectId,
-      );
-
-    if (
-      !project
-    ) {
-      return;
+    try {
+      const saved = await updateHistory(await loadHistory(threadId), { workspace_id: projectId });
+      if (createSnapshotRef.current().threadId === saved.thread_id) {
+        restoreSnapshot(historySnapshot(saved));
+        setActiveProjectId(projectId);
+      }
+      historyRefreshRef.current();
+    } catch (error) {
+      setHistoryNotice(error instanceof Error ? error.message : "Could not move the conversation.");
     }
-
-    const snapshot:
-      ChatSnapshot =
-      {
-        messages,
-        threadId,
-        model,
-      };
-
-    upsertProjectConversation(
-      projectId,
-      snapshot,
-    );
-
-    setConversationHistory(
-      (
-        current,
-      ) =>
-        current.filter(
-          (
-            item,
-          ) =>
-            item.id !==
-            activeConversationId,
-        ),
-    );
-
-    setActiveProjectId(
-      projectId,
-    );
-
-    setActiveConversationId(
-      crypto.randomUUID(),
-    );
-
-    addNotification(
-      "Chat moved to project",
-
-      `The current chat was moved to "${project.name}".`,
-    );
-
-    setActiveView(
-      "chats",
-    );
   }
 
   /* ==================================================== */
   /* DELETE ACTIVE CHAT                                   */
   /* ==================================================== */
 
-  function deleteActiveChat() {
-    if (
-      messages.length ===
-      0
-    ) {
-      return;
-    }
-
-    if (
-      !activeProjectId
-    ) {
-      deleteConversation(
-        activeConversationId,
-      );
-
-      return;
-    }
-
-    if (
-      appSettings.confirmDestructiveActions &&
-      !window.confirm(
-        "Delete this project chat?\n\nThis removes the conversation from the current project.",
-      )
-    ) {
-      return;
-    }
-
-    setProjects(
-      (
-        current,
-      ) =>
-        current.map(
-          (
-            project,
-          ) =>
-            project.id ===
-            activeProjectId
-              ? {
-                  ...project,
-
-                  updatedAt:
-                    Date.now(),
-
-                  conversations:
-                    project.conversations.filter(
-                      (
-                        conversation,
-                      ) =>
-                        conversation.id !==
-                        threadId,
-                    ),
-                }
-              : project,
-        ),
-    );
-
-    clearChat();
-
-    resetFreshChatDefaults();
+  async function deleteActiveChat() {
+    if (loading || messages.length === 0) return;
+    const item = conversationHistory.find((entry) => entry.snapshot.threadId === threadId);
+    if (item) await deleteConversation(item.id);
+    else setHistoryNotice("Import this browser conversation before deleting saved history.");
   }
 
   /* ==================================================== */
@@ -2610,6 +2337,7 @@ export default function AppShell({
     await sendMessage(
       prompt,
       attachmentIds,
+      { conversationId: threadId, workspaceId: activeProjectId },
     );
   }
 
@@ -2938,6 +2666,41 @@ export default function AppShell({
             deleteActiveChat
           }
         />
+
+        <div className="flex flex-wrap items-center gap-3 border-b px-4 py-2 text-xs" aria-live="polite">
+          {(serverHistoryLoading || historyLoading) && <span>Loading saved history…</span>}
+          {(historyError || historyNotice) && <span role="alert">{historyError || historyNotice}</span>}
+          <button type="button" onClick={() => {
+            historyRefreshRef.current();
+            const snapshot = createSnapshot();
+            if (snapshot.serverPersisted) restoreSnapshot(snapshot);
+          }}>Reload history</button>
+          <button type="button" disabled={importingHistory || loading} onClick={() => void importBrowserHistory()}>
+            {importingHistory ? "Importing…" : "Import browser history"}
+          </button>
+          <span>Edit and regenerate create a new revision without running tools.</span>
+          <button type="button" disabled={loading || historyLoading} onClick={() => void openRevisions()}>Saved revisions</button>
+          <MemoryPanel key={threadId} workspaceId={createSnapshot().workspaceId ?? activeProjectId ?? threadId} />
+        </div>
+
+        <Dialog.Root open={revisionThread !== null} onOpenChange={(open) => {
+          if (!open) { revisionSelectionRef.current += 1; setRevisionThread(null); }
+        }}>
+          <Dialog.Portal>
+            <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50" />
+            <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[80vh] w-[min(90vw,800px)] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl border bg-background p-6 text-foreground">
+              <Dialog.Title className="font-semibold">Saved conversation revisions</Dialog.Title>
+              <Dialog.Description className="my-2 text-sm">Earlier messages and unsuccessful attempts are retained here. Viewing them does not run the agent.</Dialog.Description>
+              <div className="flex flex-wrap gap-2">
+                {savedRevisions.map((revision) => <button className="rounded border px-2 py-1 text-xs" type="button" key={revision.id} onClick={() => void viewRevision(revision.id)}>
+                  {revision.operation} · {revision.state} · {new Date(revision.createdAt).toLocaleString()}
+                </button>)}
+              </div>
+              <pre className="my-4 whitespace-pre-wrap break-words text-sm">{revisionText}</pre>
+              <Dialog.Close className="rounded border px-3 py-1">Close</Dialog.Close>
+            </Dialog.Content>
+          </Dialog.Portal>
+        </Dialog.Root>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {!routeView ? (

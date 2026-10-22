@@ -1,7 +1,8 @@
 from pathlib import Path
 from typing import List
 import json
-import mimetypes
+import hashlib
+import io
 import re
 from uuid import uuid4
 from dotenv import load_dotenv
@@ -19,39 +20,39 @@ os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
 from langchain_chroma import Chroma
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from models import FreeGoogleEmbeddings
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import ChatGoogleGenerativeAI
 
 import docx2txt
-from pypdf import PdfReader
+from upload_security import (
+    MAX_ATTACHMENTS, MAX_DOCUMENT_CHUNKS, MAX_EXTRACTED_CHARS, MAX_UPLOAD_BYTES,
+    UPLOAD_CHUNK_BYTES, SUPPORTED_DOCUMENT_SUFFIXES, SUPPORTED_IMAGE_SUFFIXES,
+    UploadError, checked_pdf, guarded_path, read_bounded, safe_open,
+    thread_directory, thread_lock, upload_suffix, validate_file, validate_thread_id,
+)
+from ownership import OwnershipError, current_owner, require_thread
+from usage_limits import UsageLimitError, limited
+from evidence import document_source, evidence_note, register_sources
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
 
-UPLOAD_ROOT = BACKEND_DIR / "uploads"
-CHROMA_ROOT = BACKEND_DIR / "chroma_db"
+RUNTIME_DIR = Path(os.environ.get("CLAWBIT_RUNTIME_DIR", BACKEND_DIR))
+UPLOAD_ROOT = RUNTIME_DIR / "uploads"
+CHROMA_ROOT = RUNTIME_DIR / "chroma_db"
 
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 CHROMA_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Embeddings model
-embeddings = GoogleGenerativeAIEmbeddings(model="gemini-embedding-001")
-
-vision_model = ChatGoogleGenerativeAI(
-    model="gemini-latest",
-    temperature=0
-)
+embeddings = FreeGoogleEmbeddings(model="gemini-embedding-001")
 
 vectorstore = Chroma(
     collection_name="agentic_chatbot_docs",
     embedding_function=embeddings,
     persist_directory=str(CHROMA_ROOT)
 )
-
-SUPPORTED_DOCUMENT_SUFFIXES = {".pdf", ".docx", ".txt", ".md", ".csv"}
-SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
 RAG_CACHE_TTL_SECONDS = 300
 RAG_CACHE_MAX_ENTRIES = 128
@@ -60,10 +61,9 @@ _RAG_CACHE = {}
 _RAG_CACHE_LOCK = Lock()
 
 
-def _thread_upload_dir(thread_id: str) -> Path:
-    directory = UPLOAD_ROOT / thread_id
-    directory.mkdir(parents=True, exist_ok=True)
-    return directory
+def _thread_upload_dir(thread_id: str, *, create=False) -> Path:
+    require_thread(thread_id, create=create, missing_ok=not create)
+    return thread_directory(UPLOAD_ROOT, thread_id, create=create)
 
 
 def _manifest_path(thread_id: str) -> Path:
@@ -73,35 +73,73 @@ def _manifest_path(thread_id: str) -> Path:
 def _load_manifest(thread_id: str) -> list[dict]:
     path = _manifest_path(thread_id)
 
+    guarded_path(UPLOAD_ROOT, path)
     if not path.exists():
         return []
 
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+        manifest = json.loads(read_bounded(UPLOAD_ROOT, path, 1024 * 1024))
+        if not isinstance(manifest, list) or not all(isinstance(item, dict) for item in manifest):
+            raise ValueError("Invalid manifest")
+        return manifest
+    except (ValueError, OSError) as exc:
+        raise UploadError("Attachment metadata could not be read safely.") from exc
 
 
 def _save_manifest(thread_id: str, manifest: list[dict]) -> None:
-    _manifest_path(thread_id).write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json(_manifest_path(thread_id), manifest)
 
 
-def _sanitize_filename(filename: str) -> str:
-    filename = Path(filename).name
-    filename = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._")
-    return filename or "upload"
+def _write_json(path: Path, value) -> None:
+    _attachment_path(str(path))
+    temporary = path.with_name(f".manifest-{uuid4().hex}.tmp")
+    try:
+        with safe_open(UPLOAD_ROOT, temporary, "xb") as stream:
+            stream.write(json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8"))
+            stream.flush()
+            os.fsync(stream.fileno())
+        guarded_path(UPLOAD_ROOT, path)
+        os.replace(temporary, path)
+    finally:
+        _remove_file(temporary)
 
 
-def _detect_kind(file_path: Path) -> str:
-    suffix = file_path.suffix.lower()
-    if suffix in SUPPORTED_DOCUMENT_SUFFIXES:
-        return "document"
-    if suffix in SUPPORTED_IMAGE_SUFFIXES:
-        return "image"
-    raise ValueError("Unsupported file type. Upload PDF, DOCX, TXT, MD, CSV, or image files.")
+def _remove_file(path: Path):
+    _attachment_path(str(path)).unlink(missing_ok=True)
+
+
+def _attachment_path(file_path: str, thread_id: str | None = None) -> Path:
+    path = guarded_path(UPLOAD_ROOT, Path(file_path))
+    relative = path.relative_to(UPLOAD_ROOT.absolute())
+    if len(relative.parts) != 2:
+        raise UploadError("Invalid attachment path.")
+    validate_thread_id(relative.parts[0])
+    if thread_id is not None and path.parent != _thread_upload_dir(thread_id):
+        raise UploadError("Attachment does not belong to this thread.")
+    require_thread(relative.parts[0])
+    return path
+
+
+def read_attachment_bytes(record: dict) -> bytes:
+    path = _attachment_path(record["path"])
+    kind, _ = validate_file(UPLOAD_ROOT, path)
+    if kind != "image":
+        raise UploadError("Expected an image attachment.")
+    return read_bounded(UPLOAD_ROOT, path)
+
+
+def read_source_bytes(thread_id: str, attachment_id: str) -> bytes:
+    """Read an owned citation document through the same upload path guards."""
+    require_thread(thread_id)
+    record = get_attachment_records(thread_id, [attachment_id])[0]
+    path = _attachment_path(record["path"], thread_id)
+    try:
+        kind, _ = validate_file(UPLOAD_ROOT, path)
+        if kind != "document":
+            raise UploadError("Expected a document source.")
+        return read_bounded(UPLOAD_ROOT, path)
+    except OSError as exc:
+        raise UploadError("Source is unavailable. It may have been removed.") from exc
 
 
 def _preview_text(text: str, limit: int = 5000) -> str:
@@ -112,19 +150,122 @@ def _preview_text(text: str, limit: int = 5000) -> str:
 def get_attachment_records(thread_id: str, attachment_ids: list[str] | None = None) -> list[dict]:
     manifest = _load_manifest(thread_id)
 
-    if not attachment_ids:
-        return manifest
+    attachment_id_set = set(attachment_ids or [])
+    records = [item for item in manifest if not attachment_ids or item.get("attachment_id") in attachment_id_set]
+    if attachment_ids and {item.get("attachment_id") for item in records} != attachment_id_set:
+        raise OwnershipError()
+    for record in records:
+        _attachment_path(record.get("path", ""), thread_id)
+    return records
 
-    attachment_id_set = set(attachment_ids)
-    return [item for item in manifest if item.get("attachment_id") in attachment_id_set]
+
+def _index_filter(thread_id, attachment_id):
+    return {"$and": [{"thread_id": thread_id}, {"attachment_id": attachment_id}]}
 
 
+def _recover_pending(thread_id):
+    """Finish interrupted cleanup under the thread lock; never expose pending vectors."""
+    journal = _thread_upload_dir(thread_id) / ".pending.json"
+    guarded_path(UPLOAD_ROOT, journal)
+    if not journal.exists():
+        return
+    pending = json.loads(read_bounded(UPLOAD_ROOT, journal, 16 * 1024))
+    path = _attachment_path(pending["path"], thread_id)
+    manifest = _load_manifest(thread_id)
+    committed = any(item.get("attachment_id") == pending["attachment_id"] for item in manifest)
+    if pending["operation"] == "delete" or not committed:
+        if committed:
+            _save_manifest(thread_id, [item for item in manifest if item.get("attachment_id") != pending["attachment_id"]])
+            _RAG_CACHE.clear()
+        try:
+            if pending.get("indexed", True):
+                vectorstore.delete(where=_index_filter(thread_id, pending["attachment_id"]))
+        except Exception as exc:
+            _remove_file(path)
+            raise UploadError("Attachment cleanup is pending. Please retry when storage is available.", 503) from exc
+        _remove_file(path)
+    _remove_file(journal)
+
+
+def _check_capacity(thread_id):
+    if len(_load_manifest(thread_id)) >= MAX_ATTACHMENTS:
+        raise UploadError("A thread may contain at most 10 attachments.", 409)
+
+
+@limited("upload")
+async def receive_uploaded_file(upload, thread_id: str):
+    validate_thread_id(thread_id)
+    require_thread(thread_id, create=True)
+    suffix = upload_suffix(upload.filename or "")
+    if upload.size is not None and upload.size > MAX_UPLOAD_BYTES:
+        raise UploadError("Upload exceeds 10 MiB.", 413)
+    with thread_lock(UPLOAD_ROOT, thread_id) as directory:
+        _recover_pending(thread_id)
+        _check_capacity(thread_id)
+        path = directory / f"{uuid4().hex}{suffix}"
+        journal = directory / ".pending.json"
+        created = False
+        try:
+            with safe_open(UPLOAD_ROOT, path, "xb") as stream:
+                created = True
+                _write_json(journal, {"operation": "upload", "attachment_id": path.stem,
+                                      "path": str(path), "indexed": False})
+                size = 0
+                while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+                    size += len(chunk)
+                    if size > MAX_UPLOAD_BYTES:
+                        raise UploadError("Upload exceeds 10 MiB.", 413)
+                    stream.write(chunk)
+            return _save_uploaded_file(path, thread_id, upload.filename)
+        except BaseException:
+            if created:
+                if journal.exists():
+                    _recover_pending(thread_id)
+                elif not any(item.get("attachment_id") == path.stem for item in _load_manifest(thread_id)):
+                    # Cleanup itself may have removed the journal before raising.
+                    # Check the durable commit before deleting; an unreadable
+                    # manifest must also leave the attachment intact.
+                    _remove_file(path)
+            raise
+        finally:
+            await upload.close()
+
+
+@limited("upload")
 def save_uploaded_file(file_path: str, thread_id: str, original_name: str | None = None):
-    path = Path(file_path)
-    kind = _detect_kind(path)
-    attachment_id = uuid4().hex
+    require_thread(thread_id)
+    path = _attachment_path(file_path, thread_id)
+    with thread_lock(UPLOAD_ROOT, thread_id):
+        _recover_pending(thread_id)
+        _check_capacity(thread_id)
+        if any(_attachment_path(item["path"], thread_id) == path for item in _load_manifest(thread_id)):
+            raise UploadError("Attachment already exists.")
+        return _save_uploaded_file(path, thread_id, original_name)
+
+
+@limited("ingestion")
+def _save_uploaded_file(path: Path, thread_id: str, original_name: str | None):
+    kind, mime_type = validate_file(UPLOAD_ROOT, path)
+    # The HTTP receiver already generates this UUID. Legacy names are not reused
+    # for new attachments saved through the Python helper.
+    attachment_id = path.stem if re.fullmatch(r"[a-f0-9]{32}", path.stem) else uuid4().hex
+    if any(item.get("attachment_id") == attachment_id for item in _load_manifest(thread_id)):
+        raise UploadError("Attachment already exists.")
     display_name = original_name or path.name
-    mime_type = mimetypes.guess_type(display_name)[0] or path.suffix.lower().lstrip(".")
+    destination = path.with_name(attachment_id + path.suffix.lower())
+    if path != destination:
+        created = False
+        try:
+            with safe_open(UPLOAD_ROOT, path, "rb") as source, safe_open(UPLOAD_ROOT, destination, "xb") as target:
+                created = True
+                while chunk := source.read(UPLOAD_CHUNK_BYTES):
+                    target.write(chunk)
+        except BaseException:
+            if created:
+                _remove_file(destination)
+            raise
+        _remove_file(path)
+        path = destination
 
     record = {
         "attachment_id": attachment_id,
@@ -138,70 +279,95 @@ def save_uploaded_file(file_path: str, thread_id: str, original_name: str | None
         "rag_error": None,
     }
 
-    if kind == "document":
-        try:
-            extracted_text = read_file_text(str(path))
-        except Exception as exc:
-            raise ValueError(f"Could not read this file: {exc}")
-
-        if not extracted_text.strip():
-            raise ValueError("No text could be extracted from this file.")
-
-        record["preview"] = _preview_text(extracted_text)
-
-        try:
+    journal = path.parent / ".pending.json"
+    try:
+        pages = _extract_pages(path) if kind == "document" else []
+        if kind == "document":
+            extracted_text = "\n".join(text for _, text in pages)
+            if not extracted_text.strip():
+                raise UploadError("No text could be extracted from this file.")
+            record["preview"] = _preview_text(extracted_text)
+        _write_json(journal, {"operation": "upload", "attachment_id": attachment_id, "path": str(path)})
+        if kind == "document":
             add_document_to_rag(
-                str(path),
-                thread_id,
-                attachment_id=attachment_id,
-                source=display_name,
+                str(path), thread_id, attachment_id=attachment_id, source=display_name, _pages=pages,
             )
-        except Exception as exc:
-            record["rag_error"] = str(exc)
-
-        if not record["preview"]:
-            record["preview"] = None
-
-    manifest = _load_manifest(thread_id)
-    manifest = [item for item in manifest if item.get("attachment_id") != attachment_id]
-    manifest.append(record)
-    _save_manifest(thread_id, manifest)
-
+        manifest = _load_manifest(thread_id)
+        if any(item.get("attachment_id") == attachment_id for item in manifest):
+            raise UploadError("Attachment already exists.")
+        _save_manifest(thread_id, [*manifest, record])
+    except BaseException as exc:
+        # An atomic replace can commit successfully before a cleanup error or
+        # interruption. Never roll back the file underneath a committed record.
+        if any(item.get("attachment_id") == attachment_id for item in _load_manifest(thread_id)):
+            _RAG_CACHE.clear()
+            if isinstance(exc, Exception):
+                return record  # The pending marker is cleaned on the next mutation.
+            raise
+        _remove_file(path)
+        if journal.exists():
+            _recover_pending(thread_id)
+        if isinstance(exc, UploadError) or not isinstance(exc, Exception):
+            raise
+        raise UploadError("The file could not be indexed. Please retry.", 503) from exc
+    # If interrupted here, recovery recognizes the committed manifest and keeps it.
+    try:
+        _remove_file(journal)
+    except OSError:
+        # A committed upload remains valid. The next mutation removes this marker.
+        pass
+    _RAG_CACHE.clear()
     return record
 
 
 
 def read_file_text(file_path: str) -> str:
-    path = Path(file_path)
-    suffix = path.suffix.lower()
-
-    if suffix == ".pdf":
-        reader = PdfReader(file_path)
-        text = ""
-
-        for page in reader.pages:
-            text += page.extract_text() or ""
-            text += "\n"
-
-        return text
-
-    if suffix == ".docx":
-        return docx2txt.process(file_path)
-
-    if suffix in [".txt", ".md", ".py", ".csv"]:
-        return path.read_text(encoding="utf-8", errors="ignore")
-
-    raise ValueError("Unsupported file type. Upload PDF, DOCX, TXT, MD, or CSV.")
+    path = _attachment_path(file_path)
+    validate_file(UPLOAD_ROOT, path)
+    return "\n".join(text for _, text in _extract_pages(path))
 
 
+def _extract_pages(path: Path) -> list[tuple[int | None, str]]:
+    _attachment_path(str(path))
+    try:
+        if path.suffix.lower() == ".pdf":
+            reader = checked_pdf(read_bounded(UPLOAD_ROOT, path))
+            pages, size = [], 0
+            for number, page in enumerate(reader.pages, start=1):
+                text = page.extract_text() or ""
+                size += len(text)
+                if size > MAX_EXTRACTED_CHARS:
+                    raise UploadError("Extracted document text exceeds the limit.")
+                pages.append((number, text))
+            return pages
+        if path.suffix.lower() == ".docx":
+            text = docx2txt.process(io.BytesIO(read_bounded(UPLOAD_ROOT, path)))
+        elif path.suffix.lower() in {".txt", ".md", ".csv"}:
+            text = read_bounded(UPLOAD_ROOT, path).decode("utf-8-sig")
+        else:
+            raise UploadError("Unsupported document format.")
+        if len(text) > MAX_EXTRACTED_CHARS:
+            raise UploadError("Extracted document text exceeds the limit.")
+        return [(None, text)]
+    except UploadError:
+        raise
+    except Exception as exc:
+        raise UploadError("Could not extract text from this file.") from exc
 
+
+
+@limited("ingestion")
 def add_document_to_rag(
     file_path: str,
     thread_id: str,
     attachment_id: str | None = None,
     source: str | None = None,
+    _pages: list[tuple[int | None, str]] | None = None,
 ):
-    path = Path(file_path)
+    path = _attachment_path(file_path, thread_id)
+    if _pages is None:
+        validate_file(UPLOAD_ROOT, path)
+        _pages = _extract_pages(path)
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=900,
@@ -210,59 +376,69 @@ def add_document_to_rag(
 
     docs: List[Document] = []
 
-    if path.suffix.lower() == ".pdf":
-        reader = PdfReader(file_path)
-
-        for page_number, page in enumerate(reader.pages, start=1):
-            page_text = page.extract_text() or ""
-
-            if not page_text.strip():
-                continue
-
-            chunks = splitter.split_text(page_text)
-
-            for chunk in chunks:
-                docs.append(
-                    Document(
-                        page_content=chunk,
-                        metadata={
-                            "thread_id": thread_id,
-                            "attachment_id": attachment_id or path.name,
-                            "source": source or path.name,
-                            "page": page_number,
-                        },
-                    )
-                )
-
-    else:
-        text = read_file_text(file_path)
-
-        if not text.strip():
-            raise ValueError("No text could be extracted from this file.")
-
-        chunks = splitter.split_text(text)
-
-        for chunk in chunks:
+    for page_number, text in _pages:
+        for chunk in splitter.split_text(text):
+            metadata = {
+                "thread_id": thread_id,
+                "attachment_id": attachment_id or path.name,
+                "source": source or path.name,
+                "chunk_id": str(len(docs)),
+                "content_hash": hashlib.sha256(chunk.encode()).hexdigest(),
+            }
+            if page_number is not None:
+                metadata["page"] = page_number
             docs.append(
                 Document(
                     page_content=chunk,
-                    metadata={
-                        "thread_id": thread_id,
-                        "attachment_id": attachment_id or path.name,
-                        "source": source or path.name,
-                    },
+                    metadata=metadata,
                 )
             )
+            if len(docs) > MAX_DOCUMENT_CHUNKS:
+                raise UploadError("Document contains too many chunks to index.")
 
     if not docs:
         raise ValueError("No text could be extracted from this file.")
 
-    vectorstore.add_documents(docs)
+    # A caller-supplied attachment ID cannot overwrite another thread's vectors.
+    # Legacy vector IDs remain readable through the existing metadata filters.
+    ids = [f"{thread_id}:{attachment_id or path.name}:{index}" for index in range(len(docs))]
+    existing = vectorstore.get(
+        where=_index_filter(thread_id, attachment_id or path.name), include=["metadatas"],
+    )
+    if existing.get("ids"):
+        hashes = {
+            key: metadata.get("content_hash")
+            for key, metadata in zip(existing["ids"], existing.get("metadatas", []))
+        }
+        if len(hashes) == len(ids) and all(
+            hashes.get(key) == document.metadata["content_hash"]
+            for key, document in zip(ids, docs)
+        ):
+            return {"filename": path.name, "chunks": len(docs)}
+        raise UploadError("This attachment is already indexed. Upload a new attachment to replace it.")
+    try:
+        vectorstore.add_documents(docs, ids=ids)
+    except Exception:
+        vectorstore.delete(ids=ids)
+        raise
 
-    return {
-        "filename": path.name,
-        "chunks": len(docs),
-    }
+    _RAG_CACHE.clear()
+    return {"filename": path.name, "chunks": len(docs)}
+
+
+def delete_attachment(thread_id: str, attachment_id: str) -> bool:
+    require_thread(thread_id)
+    with thread_lock(UPLOAD_ROOT, thread_id):
+        _recover_pending(thread_id)
+        records = get_attachment_records(thread_id, [attachment_id])
+        if not records:
+            return False
+        record = records[0]
+        journal = _thread_upload_dir(thread_id) / ".pending.json"
+        _write_json(journal, {"operation": "delete", "attachment_id": attachment_id, "path": record["path"]})
+        _recover_pending(thread_id)
+        _RAG_CACHE.clear()
+        return True
 
 
 
@@ -295,6 +471,10 @@ def _bm25_search(
     attachment_ids: list[str] | None = None,
     limit: int = 12,
 ) -> list[Document]:
+    validate_thread_id(thread_id)
+    require_thread(thread_id, missing_ok=True)
+    if not attachment_ids:
+        return []
     search_filter = {"thread_id": thread_id}
 
     if attachment_ids:
@@ -315,8 +495,14 @@ def _bm25_search(
         include=["documents", "metadatas"],
     )
 
-    documents = data.get("documents") or []
-    metadatas = data.get("metadatas") or []
+    authorized = [
+        (document, metadata)
+        for document, metadata in zip(data.get("documents") or [], data.get("metadatas") or [])
+        if metadata and metadata.get("thread_id") == thread_id
+        and metadata.get("attachment_id") in attachment_ids
+    ]
+    documents = [document for document, _ in authorized]
+    metadatas = [metadata for _, metadata in authorized]
 
     if not documents:
         return []
@@ -351,6 +537,16 @@ def _bm25_search(
         )
 
     return results
+
+def _authorized_documents(
+    documents: list[Document], thread_id: str, attachment_ids: list[str],
+) -> list[Document]:
+    return [
+        document for document in documents
+        if document.metadata.get("thread_id") == thread_id
+        and document.metadata.get("attachment_id") in attachment_ids
+    ]
+
 
 def _merge_hybrid_results(
     vector_docs: list[Document],
@@ -408,6 +604,10 @@ def _rerank_documents(
     if not docs:
         return []
 
+    from observability import event
+
+    event("reranking", "started", count=len(docs))
+
     passages = [
         {
             "id": str(index),
@@ -428,8 +628,12 @@ def _rerank_documents(
 
     for result in ranked_results[:limit]:
         index = int(result["id"])
-        reranked_docs.append(docs[index])
+        if index < 0 or index >= len(docs):
+            raise ValueError("Reranker returned an unknown passage.")
+        if docs[index] not in reranked_docs:
+            reranked_docs.append(docs[index])
 
+    event("reranking", "complete", count=len(reranked_docs))
     return reranked_docs
 
 
@@ -440,6 +644,7 @@ def _build_rag_cache_key(
     k: int,
 ) -> tuple:
     return (
+        current_owner(),
         thread_id,
         tuple(sorted(document_attachment_ids)),
         query.strip().lower(),
@@ -450,6 +655,8 @@ def _build_rag_cache_key(
 def _get_rag_cache(
     cache_key: tuple,
 ):
+    if not cache_key or cache_key[0] != current_owner():
+        raise OwnershipError()
     now = time.monotonic()
 
     with _RAG_CACHE_LOCK:
@@ -483,6 +690,8 @@ def _set_rag_cache(
     result: str,
     metadata: dict,
 ):
+    if not cache_key or cache_key[0] != current_owner():
+        raise OwnershipError()
     now = time.monotonic()
 
     with _RAG_CACHE_LOCK:
@@ -523,6 +732,17 @@ def _set_rag_cache(
             metadata.copy(),
         )
 
+def _register_rag_evidence(metadata: dict) -> None:
+    register_sources(metadata.get("sources", []))
+    if metadata.get("retrieval_error"):
+        evidence_note("Document search failed; any cited excerpts come from stored previews.")
+    elif metadata.get("fallback_used"):
+        evidence_note("Search returned no ranked chunks; cited excerpts use stored previews.")
+    elif metadata.get("sources") and not metadata.get("reranking_completed"):
+        evidence_note("Document reranking was unavailable; retrieval order was retained.")
+
+
+@limited("retrieval")
 def retrieve_from_rag(
     query: str,
     thread_id: str,
@@ -530,6 +750,8 @@ def retrieve_from_rag(
     k: int = 4,
     inspector: dict | None = None,
 ) -> str:
+    validate_thread_id(thread_id)
+    require_thread(thread_id, missing_ok=True)
     records = get_attachment_records(
         thread_id,
         attachment_ids,
@@ -573,6 +795,7 @@ def retrieve_from_rag(
             )
             inspector["cache_hit"] = True
 
+        _register_rag_evidence(cached_metadata)
         return cached_result
 
     metadata = {
@@ -587,10 +810,7 @@ def retrieve_from_rag(
     retrieval_error = False
 
     try:
-        if (
-            attachment_ids
-            and not document_attachment_ids
-        ):
+        if not document_attachment_ids:
             vector_docs = []
             bm25_docs = []
 
@@ -644,12 +864,18 @@ def retrieve_from_rag(
                 limit=search_limit,
             )
 
+        # Check returned metadata as well as the database filter before any
+        # private text enters hybrid ranking, reranking, citations or caches.
+        vector_docs = _authorized_documents(vector_docs, thread_id, document_attachment_ids)
+        bm25_docs = _authorized_documents(bm25_docs, thread_id, document_attachment_ids)
         docs = _merge_hybrid_results(
             vector_docs,
             bm25_docs,
             limit=search_limit,
         )
 
+    except UsageLimitError:
+        raise
     except Exception:
         docs = []
         retrieval_error = True
@@ -710,8 +936,10 @@ def retrieve_from_rag(
 
         reranking_completed = True
 
-    except Exception:
-        pass
+    except Exception as exc:
+        from observability import event
+
+        event("reranking", "failed", error=exc)
 
     metadata.update(
         {
@@ -802,118 +1030,41 @@ def retrieve_from_rag(
     ] = len(selected_docs)
 
     if not selected_docs:
-        previews = [
-            (
-                f"[Source {index}: "
-                f"{record.get('name', 'uploaded document')}]\n"
-                f"{record.get('preview')}"
-            )
-            for index, record
-            in enumerate(
-                records,
-                start=1,
-            )
-            if (
-                record.get("kind")
-                == "document"
-                and record.get(
-                    "preview"
-                )
-            )
-        ]
-
-        if previews:
-            metadata[
-                "fallback_used"
-            ] = True
-
-            metadata["sources"] = [
-                {
-                    "file": record.get(
-                        "name",
-                        "uploaded document",
-                    ),
-                    "page": None,
-                }
-                for record in records
-                if (
-                    record.get("kind")
-                    == "document"
-                    and record.get(
-                        "preview"
-                    )
-                )
-            ][:k]
-
-            if inspector is not None:
-                inspector.update(
-                    metadata
-                )
-
-            return "\n\n".join(
-                previews[:k]
-            )
-
-        metadata[
-            "fallback_used"
-        ] = False
-
-        metadata["sources"] = []
-
-        if inspector is not None:
-            inspector.update(
-                metadata
-            )
-
-        return (
-            "No relevant uploaded document "
-            "content found."
-        )
+        # Keep the existing bounded preview fallback, explicitly identified as such.
+        selected_docs = [
+            Document(page_content=record["preview"][:2000], metadata={
+                "thread_id": thread_id, "attachment_id": record["attachment_id"],
+                "source": record.get("name", "uploaded document"), "chunk_id": "preview",
+            })
+            for record in records
+            if record.get("kind") == "document" and record.get("preview")
+        ][:k]
+        metadata["fallback_used"] = bool(selected_docs)
+    else:
+        metadata["fallback_used"] = False
 
     results = []
     inspector_sources = []
-
-    for i, doc in enumerate(
-        selected_docs,
-        start=1,
-    ):
-        source = doc.metadata.get(
-            "source",
-            "uploaded document",
-        )
-
-        page = doc.metadata.get(
-            "page"
-        )
-
-        if page:
-            source_label = (
-                f"{source} - Page {page}"
-            )
-
-        else:
-            source_label = source
-
+    remaining = 12000
+    for index, doc in enumerate(selected_docs, start=1):
+        content = doc.page_content[:min(3000, remaining)]
+        if not content:
+            break
+        remaining -= len(content)
+        source = document_source(thread_id, doc.metadata, doc.page_content)
+        location = f" - Page {source['page']}" if source.get("page") else ""
+        preview = " (preview fallback)" if metadata["fallback_used"] else ""
         results.append(
-            f"[Source {i}: "
-            f"{source_label}]\n"
-            f"{doc.page_content}"
+            f"[Source {index}: {source['file']}{location}] "
+            f"[{source['source_id']}]{preview}\n{content}"
         )
-
-        inspector_sources.append(
-            {
-                "file": source,
-                "page": page,
-            }
-        )
-
-    metadata[
-        "fallback_used"
-    ] = False
-
-    metadata[
-        "sources"
-    ] = inspector_sources
+        inspector_sources.append(source)
+    metadata["sources"] = inspector_sources
+    _register_rag_evidence(metadata)
+    if not results:
+        if inspector is not None:
+            inspector.update(metadata)
+        return "No relevant uploaded document content found."
 
     result = "\n\n".join(
         results

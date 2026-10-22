@@ -29,7 +29,8 @@ import {
 } from "react";
 
 import { setActiveChatMode } from "@/lib/api";
-import { MODELS } from "@/lib/models";
+import { useModels } from "@/hooks/useModels";
+import { PROVIDER_LABELS } from "@/lib/models";
 
 import {
   DEFAULT_APP_SETTINGS,
@@ -76,12 +77,6 @@ const PERSONALIZATION_STORAGE_KEYS = [
   "clawbit.profile.v1",
 ];
 
-const availableModels =
-  MODELS.filter(
-    (model) =>
-      model.available,
-  );
-
 /* ====================================================== */
 /* MAIN                                                   */
 /* ====================================================== */
@@ -89,6 +84,7 @@ const availableModels =
 export default function SettingsWorkspace({
   onExitSettings,
 }: SettingsWorkspaceProps) {
+  const availableModels = useModels();
   const {
     setTheme,
   } = useTheme();
@@ -825,7 +821,7 @@ export default function SettingsWorkspace({
                 (
                   model,
                 ) => (
-                  <option
+                  <option disabled={!model.available} title={model.reason}
                     key={
                       model.id
                     }
@@ -834,7 +830,7 @@ export default function SettingsWorkspace({
                     }
                   >
                     {
-                      model.label
+                      `${PROVIDER_LABELS[model.provider]} / ${model.label}${model.available ? "" : " (Unavailable)"}`
                     }
                   </option>
                 ),

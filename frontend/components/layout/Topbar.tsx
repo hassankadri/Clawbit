@@ -1,6 +1,7 @@
 "use client";
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
+import LogoutButton from "@/components/auth/LogoutButton";
 
 import {
   Bell,
@@ -191,6 +192,7 @@ export default function Topbar({
   return (
     <header className="relative z-20 flex h-[58px] shrink-0 items-center justify-end border-b border-[color:var(--border)] bg-[color:var(--background)] px-4 text-[color:var(--foreground)] lg:px-5">
       <div className="flex items-center gap-1">
+        <LogoutButton />
         {/* ============================================= */}
         {/* CLOSE NON-CHAT PAGE                          */}
         {/* ============================================= */}

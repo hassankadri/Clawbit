@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 
 from app import ChatRequest, _provider_error_message
 from models import DEFAULT_MODEL, normalize_model_name
@@ -24,9 +25,8 @@ def test_model_normalization_and_aliases():
     assert normalize_model_name(
         "Gemini 3.5 Flash"
     ) == "gemini-3.5-flash"
-    assert normalize_model_name(
-        "not-a-real-model"
-    ) == DEFAULT_MODEL
+    with pytest.raises(ValueError, match="Unknown or unapproved"):
+        normalize_model_name("not-a-real-model")
 
 
 def test_rate_limit_error_is_user_friendly():

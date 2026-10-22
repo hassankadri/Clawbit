@@ -1,6 +1,9 @@
 from datetime import datetime
 from pathlib import Path
-import re
+import os
+from upload_security import validate_thread_id
+import ownership
+from ownership import bind_resources, require_thread, require_workspace
 
 from sqlalchemy import (
     Column,
@@ -19,7 +22,7 @@ from sqlalchemy.orm import (
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
-DATA_DIR = BACKEND_DIR / "data"
+DATA_DIR = Path(os.environ.get("CLAWBIT_RUNTIME_DIR", BACKEND_DIR)) / "data"
 DATA_DIR.mkdir(
     parents=True,
     exist_ok=True,
@@ -261,6 +264,7 @@ def ensure_workspace(
     workspace_id: str,
     name: str | None = None,
 ):
+    require_workspace(workspace_id, create=True)
     db = SessionLocal()
 
     try:
@@ -307,10 +311,13 @@ def create_or_update_conversation(
     first_message: str | None = None,
     workspace_id: str | None = None,
 ):
+    validate_thread_id(thread_id)
     workspace_id = (
         workspace_id
         or thread_id
     )
+
+    bind_resources(thread_id, workspace_id)
 
     ensure_workspace(
         workspace_id
@@ -369,10 +376,13 @@ def create_or_update_conversation(
 def list_conversations(
     workspace_id: str | None = None,
 ):
+    owned_threads = ownership.store.owned_ids("thread")
+    if workspace_id:
+        require_workspace(workspace_id)
     db = SessionLocal()
 
     try:
-        query = db.query(Conversation)
+        query = db.query(Conversation).filter(Conversation.thread_id.in_(owned_threads))
 
         if workspace_id:
             query = query.filter(
@@ -398,10 +408,13 @@ def save_chat_message(
     content: str,
     workspace_id: str | None = None,
 ):
+    validate_thread_id(thread_id)
     workspace_id = (
         workspace_id
         or thread_id
     )
+
+    bind_resources(thread_id, workspace_id)
 
     db = SessionLocal()
 
@@ -439,6 +452,8 @@ def save_chat_message(
 def get_chat_history(
     thread_id: str,
 ):
+    validate_thread_id(thread_id)
+    require_thread(thread_id, missing_ok=True)
     db = SessionLocal()
 
     try:
@@ -458,151 +473,23 @@ def get_chat_history(
         db.close()
 
 
-def save_memory(
-    thread_id: str,
-    memory: str,
-    workspace_id: str | None = None,
-):
-    workspace_id = (
-        workspace_id
-        or thread_id
-    )
+def save_memory(thread_id: str, memory: str, workspace_id: str | None = None):
+    """Compatibility entry point for trusted server-side workspace memory writes."""
+    import memory_store
 
-    ensure_workspace(
-        workspace_id
-    )
-
-    db = SessionLocal()
-
-    try:
-        normalized_memory = (
-            memory.strip()
-        )
-
-        existing = (
-            db.query(LongTermMemory)
-            .filter(
-                LongTermMemory.workspace_id
-                == workspace_id,
-                LongTermMemory.memory
-                == normalized_memory,
-            )
-            .first()
-        )
-
-        if existing:
-            return (
-                "This memory is already saved."
-            )
-
-        item = LongTermMemory(
-            thread_id=thread_id,
-            workspace_id=workspace_id,
-            memory=normalized_memory,
-            created_at=datetime.utcnow(),
-        )
-
-        db.add(item)
-        db.commit()
-
-        return (
-            "Memory saved successfully."
-        )
-
-    finally:
-        db.close()
+    workspace_id = workspace_id or thread_id
+    bind_resources(thread_id, workspace_id)
+    _, duplicate = memory_store.store.save(memory, "workspace", workspace_id, thread_id)
+    return "This memory is already saved." if duplicate else "Memory saved successfully."
 
 
-def _memory_tokens(
-    value: str,
-) -> set[str]:
-    return set(
-        re.findall(
-            r"[a-z0-9]+",
-            value.lower(),
-        )
-    )
+def search_memory(thread_id: str, query: str, workspace_id: str | None = None):
+    """Read bounded, relevant memory within the verified workspace/user scopes."""
+    import memory_store
 
-
-def search_memory(
-    thread_id: str,
-    query: str,
-    workspace_id: str | None = None,
-):
-    workspace_id = (
-        workspace_id
-        or thread_id
-    )
-
-    db = SessionLocal()
-
-    try:
-        memories = (
-            db.query(LongTermMemory)
-            .filter(
-                LongTermMemory.workspace_id
-                == workspace_id
-            )
-            .order_by(
-                LongTermMemory.created_at.desc()
-            )
-            .limit(100)
-            .all()
-        )
-
-        if not memories:
-            return (
-                "No saved memory found."
-            )
-
-        query_tokens = _memory_tokens(
-            query
-        )
-
-        scored_memories = []
-
-        for memory in memories:
-            memory_tokens = _memory_tokens(
-                memory.memory
-            )
-
-            score = len(
-                query_tokens
-                & memory_tokens
-            )
-
-            scored_memories.append(
-                (
-                    score,
-                    memory.created_at,
-                    memory,
-                )
-            )
-
-        scored_memories.sort(
-            key=lambda item: (
-                item[0],
-                item[1],
-            ),
-            reverse=True,
-        )
-
-        relevant = [
-            item[2]
-            for item in scored_memories
-            if item[0] > 0
-        ][:10]
-
-        if not relevant:
-            relevant = memories[:10]
-
-        return "\n".join(
-            f"- {memory.memory}"
-            for memory in relevant
-        )
-
-    finally:
-        db.close()
+    workspace_id = workspace_id or thread_id
+    bind_resources(thread_id, workspace_id)
+    return memory_store.store.context(query, workspace_id) or "No saved memory found."
 
 
 init_db()

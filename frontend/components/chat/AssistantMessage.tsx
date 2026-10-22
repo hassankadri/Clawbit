@@ -27,8 +27,11 @@ import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 import Markdown from "./Markdown";
+import type { SourceReference, ResearchReport } from "@/lib/knowledge";
 
 interface Props {
+  sources?: SourceReference[];
+  research?: ResearchReport;
   content: string;
 
   theme: Theme;
@@ -38,7 +41,10 @@ interface Props {
   status?:
     | "complete"
     | "streaming"
-    | "error";
+    | "error"
+    | "cancelled";
+
+  error?: string;
 
   /*
    * Kept for compatibility with Message.tsx.
@@ -59,9 +65,12 @@ type Feedback =
 
 export default function AssistantMessage({
   content,
+  sources,
+  research,
   theme,
   assistantName,
   status = "complete",
+  error,
   onRetry,
   onStop,
 }: Props) {
@@ -359,6 +368,7 @@ export default function AssistantMessage({
         ) : status ===
           "error" ? (
           <div>
+            {error && content && <Markdown content={content} sources={sources} />}
             <p
               className={cn(
                 "text-[14px] leading-7",
@@ -368,7 +378,7 @@ export default function AssistantMessage({
                   : "text-red-700",
               )}
             >
-              {content}
+              {error ?? content}
             </p>
 
             <button
@@ -398,11 +408,18 @@ export default function AssistantMessage({
                   : "text-zinc-800",
               )}
             >
+              {research && <p className="mb-3 text-xs text-muted-foreground" role="status">
+                {research.retrieved_sources} retrieved sources; {research.cited_sources} cited. {research.limitations.join(" ")}
+              </p>}
               <Markdown
+                sources={sources}
                 content={
                   content
                 }
               />
+              {status === "cancelled" && (
+                <p className="mt-2 text-xs text-zinc-500">Generation stopped.</p>
+              )}
             </div>
 
             {/* ========================================= */}

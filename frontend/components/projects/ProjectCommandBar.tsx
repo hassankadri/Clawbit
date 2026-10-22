@@ -26,7 +26,9 @@ import {
 } from "react";
 
 import { uploadAttachment } from "@/lib/api";
-import { MODELS } from "@/lib/models";
+import { MODELS, confirmModelSelection, imageSelectionError } from "@/lib/models";
+import { useModels } from "@/hooks/useModels";
+import ModelChoices from "@/components/layout/ModelChoices";
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
@@ -174,18 +176,11 @@ interface ProjectCommandBarProps {
 /* CONSTANTS                                              */
 /* ====================================================== */
 
-const availableModels =
-  MODELS.filter(
-    (item) =>
-      item.available,
-  );
-
-const acceptedFiles =
-  ".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp";
-
 /* ====================================================== */
 /* COMPONENT                                              */
 /* ====================================================== */
+
+const acceptedFiles = ".pdf,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp";
 
 export default function ProjectCommandBar({
   theme,
@@ -218,6 +213,7 @@ export default function ProjectCommandBar({
 
   onSend,
 }: ProjectCommandBarProps) {
+  const availableModels = useModels();
   const isDark =
     theme === "dark";
 
@@ -290,6 +286,7 @@ export default function ProjectCommandBar({
       );
     }, [
       model,
+      availableModels,
     ]);
 
   /* ==================================================== */
@@ -426,6 +423,9 @@ export default function ProjectCommandBar({
         files,
       )
     ) {
+      const imageError = imageSelectionError(selectedModel, file);
+      if (imageError) { window.alert(imageError); continue; }
+
       const localId =
         crypto.randomUUID();
 
@@ -604,6 +604,11 @@ export default function ProjectCommandBar({
   /* ==================================================== */
 
   async function submit() {
+    if (!selectedModel.available) { window.alert(selectedModel.reason); return; }
+    if (!confirmModelSelection(selectedModel)) return;
+    if (attachments.some((item) => item.kind === "image") && !selectedModel.capabilities.vision) {
+      window.alert("Choose a vision-capable model for the attached images."); return;
+    }
     if (
       !canSend
     ) {
@@ -1091,79 +1096,9 @@ export default function ProjectCommandBar({
                       : "border-black/[0.10] bg-white text-zinc-950",
                   )}
                 >
-                  {availableModels.map(
-                    (
-                      item,
-                    ) => {
-                      const selected =
-                        item.id ===
-                        model;
-
-                      return (
-                        <button
-                          key={
-                            item.id
-                          }
-                          type="button"
-                          onClick={() => {
-                            onModelChange(
-                              item.id,
-                            );
-
-                            setModelOpen(
-                              false,
-                            );
-                          }}
-                          className={cn(
-                            "flex w-full items-center gap-3 rounded-[11px] px-3 py-2.5 text-left transition-colors",
-
-                            selected
-                              ? isDark
-                                ? "bg-white/[0.085]"
-                                : "bg-black/[0.06]"
-                              : isDark
-                                ? "hover:bg-white/[0.055]"
-                                : "hover:bg-black/[0.045]",
-                          )}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p
-                              className={cn(
-                                "truncate text-[12px] font-medium",
-
-                                isDark
-                                  ? "text-zinc-200"
-                                  : "text-zinc-900",
-                              )}
-                            >
-                              {
-                                item.label
-                              }
-                            </p>
-
-                            <p className="mt-0.5 truncate text-[10px] text-zinc-500">
-                              {
-                                item.description
-                              }
-                            </p>
-                          </div>
-
-                          {selected ? (
-                            <Check
-                              size={
-                                15
-                              }
-                              className={
-                                isDark
-                                  ? "text-white"
-                                  : "text-black"
-                              }
-                            />
-                          ) : null}
-                        </button>
-                      );
-                    },
-                  )}
+                  <ModelChoices models={availableModels} selected={model} onSelect={(id) => {
+                    onModelChange(id); setModelOpen(false);
+                  }} />
                 </Popover.Content>
               </Popover.Portal>
             </Popover.Root>

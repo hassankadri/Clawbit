@@ -17,10 +17,12 @@ def _make_doc(
     text: str,
     attachment_id: str,
     source: str,
+    thread_id: str,
 ) -> Document:
     return Document(
         page_content=text,
         metadata={
+            "thread_id": thread_id,
             "attachment_id": attachment_id,
             "source": source,
         },
@@ -75,6 +77,7 @@ def test_offline_rag_evaluation(monkeypatch):
                 text,
                 attachment_id,
                 source,
+                case["thread_id"],
             )
             for text in case[
                 "vector_candidates"
@@ -86,6 +89,7 @@ def test_offline_rag_evaluation(monkeypatch):
                 text,
                 attachment_id,
                 source,
+                case["thread_id"],
             )
             for text in case[
                 "bm25_candidates"

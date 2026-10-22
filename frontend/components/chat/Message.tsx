@@ -1,5 +1,6 @@
 "use client";
 
+import type { SourceReference, ResearchReport } from "@/lib/knowledge";
 import type { Theme } from "@/lib/theme";
 import AssistantMessage from "./AssistantMessage";
 import UserMessage from "./UserMessage";
@@ -11,7 +12,10 @@ export interface MessageProps {
     id: string;
     role: "user" | "assistant";
     content: string;
-    status?: "complete" | "streaming" | "error";
+    status?: "complete" | "streaming" | "error" | "cancelled";
+    error?: string;
+    sources?: SourceReference[];
+    research?: ResearchReport;
   };
   onEditMessage: (messageId: string, content: string) => Promise<void> | void;
   onDeleteMessage: (messageId: string) => void;
@@ -45,6 +49,9 @@ export default function Message({
       assistantName={assistantName}
       content={message.content}
       status={message.status}
+      error={message.error}
+      sources={message.sources}
+      research={message.research}
       onDelete={() => onDeleteMessage(message.id)}
       onRetry={() => onRetryMessage(message.id)}
       onStop={onStopGeneration}

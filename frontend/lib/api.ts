@@ -1,17 +1,15 @@
 import {
+  API_URL,
+  authenticatedFetch,
+  authenticatedHeaders,
+  handleAuthStatus,
+  registerUpload,
+} from "@/lib/auth";
+import {
   getPersonalizationRequestPayload,
   type PersonalizationRequestPayload,
 } from "@/lib/personalization";
-
-/* ====================================================== */
-/* API                                                    */
-/* ====================================================== */
-
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL ||
-  (typeof window !== "undefined"
-    ? `http://${window.location.hostname || "127.0.0.1"}:8000`
-    : "http://127.0.0.1:8000");
+import { getModelConsent, type ModelOption } from "@/lib/models";
 
 /* ====================================================== */
 /* CHAT MODE                                              */
@@ -93,12 +91,10 @@ export function getActiveChatMode():
 /* CHAT TYPES                                             */
 /* ====================================================== */
 
-export interface ChatInspectorSource {
-  file: string;
-  page: number | null;
-}
+export type ChatInspectorSource = import("@/lib/knowledge").SourceReference;
 
 export interface ChatInspector {
+  research?: import("@/lib/knowledge").ResearchReport;
   rag_used: boolean;
 
   user_query?:
@@ -151,6 +147,13 @@ export interface ChatInspector {
 }
 
 export interface ChatRequest {
+  request_id?: string;
+  user_message_id?: string;
+  assistant_message_id?: string;
+  expected_version?: number;
+  operation?: "send" | "edit" | "retry" | "regenerate";
+  target_message_id?: string;
+  provider_consent?: string;
   message:
     string;
 
@@ -221,6 +224,7 @@ function resolveChatRequest(
     ...personalization,
 
     ...body,
+    provider_consent: body.provider_consent ?? getModelConsent(body.model),
 
     /*
      * The UI's current Normal / Research setting is also
@@ -287,6 +291,8 @@ export interface StreamDoneEvent {
 }
 
 export interface StreamErrorEvent {
+  status_code?: number;
+  retry_after?: number | null;
   message:
     string;
 
@@ -295,6 +301,7 @@ export interface StreamErrorEvent {
 }
 
 export interface ChatStreamHandlers {
+  onSources?: (sources: ChatInspectorSource[]) => void;
   onStart?: (
     event: StreamStartEvent,
   ) => void;
@@ -423,53 +430,29 @@ export interface MCPActionResponse {
 /* ERROR HELPERS                                          */
 /* ====================================================== */
 
+function withRetryHint(message: string, retryAfter: unknown): string {
+  const seconds = typeof retryAfter === "string" ? Number(retryAfter) : retryAfter;
+  if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0
+      || /try again in \d+ seconds/i.test(message)) {
+    return message;
+  }
+  return `${message} Try again in ${Math.ceil(seconds)} seconds.`;
+}
+
 function getErrorMessage(
   responseText: string,
   fallback: string,
-) {
+  retryAfter?: string | null,
+): string {
   try {
-    const parsed =
-      JSON.parse(
-        responseText,
-      ) as {
-        detail?:
-          unknown;
-
-        error?:
-          unknown;
-
-        message?:
-          unknown;
-      };
-
-    if (
-      typeof parsed.detail ===
-        "string" &&
-      parsed.detail.trim()
-    ) {
-      return parsed.detail;
-    }
-
-    if (
-      typeof parsed.error ===
-        "string" &&
-      parsed.error.trim()
-    ) {
-      return parsed.error;
-    }
-
-    if (
-      typeof parsed.message ===
-        "string" &&
-      parsed.message.trim()
-    ) {
-      return parsed.message;
-    }
+    const parsed = JSON.parse(responseText) as Record<string, unknown>;
+    const message = [parsed.detail, parsed.error, parsed.message].find(
+      (value): value is string => typeof value === "string" && Boolean(value.trim()),
+    );
+    return withRetryHint(message ?? fallback, parsed.retry_after ?? retryAfter);
   } catch {
-    // Response was not JSON.
+    return withRetryHint(fallback, retryAfter);
   }
-
-  return fallback;
 }
 
 function backendUnavailableMessage() {
@@ -490,7 +473,7 @@ async function requestJSON<T>(
 ): Promise<T> {
   try {
     const response =
-      await fetch(
+      await authenticatedFetch(
         `${API_URL}${path}`,
         {
           ...options,
@@ -522,6 +505,7 @@ async function requestJSON<T>(
         getErrorMessage(
           responseText,
           `Request failed with status ${response.status}.`,
+          response.headers.get("Retry-After"),
         ),
       );
     }
@@ -599,6 +583,21 @@ export function uploadAttachment(
           `${API_URL}/attachments/upload`,
         );
 
+        xhr.withCredentials = true;
+        let requestCsrfToken = "";
+        try {
+          const headers = authenticatedHeaders();
+          requestCsrfToken = headers["X-CSRF-Token"];
+          for (const [name, value] of Object.entries(headers)) {
+            xhr.setRequestHeader(name, value);
+          }
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        const unregister = registerUpload(() => xhr.abort());
+        xhr.onloadend = unregister;
+
         xhr.upload.onprogress =
           (
             event,
@@ -656,6 +655,7 @@ export function uploadAttachment(
 
         xhr.onload =
           () => {
+            handleAuthStatus(xhr.status, requestCsrfToken);
             if (
               xhr.status <
                 200 ||
@@ -667,6 +667,7 @@ export function uploadAttachment(
                   xhr.responseText,
 
                   "Upload failed. Please try again.",
+                  xhr.getResponseHeader("Retry-After"),
                 );
 
               handlers.onError?.(
@@ -741,7 +742,7 @@ export async function chat(
 ): Promise<ChatResponse> {
   try {
     const response =
-      await fetch(
+      await authenticatedFetch(
         `${API_URL}/chat`,
         {
           method:
@@ -774,6 +775,7 @@ export async function chat(
           responseText,
 
           "Failed to send message.",
+          response.headers.get("Retry-After"),
         ),
       );
     }
@@ -817,296 +819,150 @@ export async function chat(
 /* STREAMING CHAT                                         */
 /* ====================================================== */
 
+export class ChatStreamError extends Error {
+  constructor(
+    message: string,
+    public readonly status_code?: number,
+    public readonly retry_after?: number | null,
+  ) {
+    super(message);
+    this.name = "ChatStreamError";
+  }
+}
+
 export async function streamChat(
   body: ChatRequest,
-
-  handlers:
-    ChatStreamHandlers,
-
+  handlers: ChatStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
-  let response:
-    Response;
+  const requestCsrfToken = authenticatedHeaders()["X-CSRF-Token"];
+  let response: Response;
+  try {
+    response = await authenticatedFetch(`${API_URL}/chat/stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(resolveChatRequest(body)),
+      signal,
+    });
+  } catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
+      throw error;
+    }
+    throw new ChatStreamError(backendUnavailableMessage());
+  }
+  if (!response.ok) {
+    const retry = response.headers.get("Retry-After");
+    throw new ChatStreamError(
+      getErrorMessage(await response.text(), "Failed to start streaming response.", retry),
+      response.status,
+      retry && Number.isFinite(Number(retry)) ? Number(retry) : undefined,
+    );
+  }
+  if (!response.body) {
+    throw new ChatStreamError("Streaming response body is unavailable.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const maximumFrameLength = 1024 * 1024;
+  let buffer = "";
+  let terminal = false;
+  let threadId: string | undefined;
+  const malformed = () => new ChatStreamError("The response stream was malformed. Please retry.");
+
+  function handleEventBlock(block: string) {
+    if (block.length > maximumFrameLength) throw malformed();
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      if (line.startsWith("data:")) dataLines.push(line.slice(5).replace(/^ /, ""));
+    }
+    // Comments, keepalives and future event types are not assistant text.
+    if (!["start", "token", "done", "error", "sources"].includes(eventName)) return;
+    if (!dataLines.length) throw malformed();
+    let data: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(dataLines.join("\n"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw malformed();
+      data = parsed as Record<string, unknown>;
+    } catch {
+      throw malformed();
+    }
+    if (eventName === "start" || eventName === "done") {
+      if (typeof data.thread_id !== "string" || !data.thread_id
+          || (threadId !== undefined && data.thread_id !== threadId)
+          || (body.thread_id && data.thread_id !== body.thread_id)) throw malformed();
+      if (eventName === "start") {
+        if (threadId !== undefined) throw malformed();
+        threadId = data.thread_id;
+        handlers.onStart?.(data as unknown as StreamStartEvent);
+      } else {
+        terminal = true;
+        handlers.onDone?.(data as unknown as StreamDoneEvent);
+      }
+    } else if (eventName === "sources") {
+      if (!Array.isArray(data.sources) || data.sources.length > 32 || data.sources.some((source) =>
+        !source || typeof source !== "object" || typeof source.file !== "string"
+        || typeof source.source_id !== "string" || !/^S[0-9a-f]{24}$/.test(source.source_id)
+        || (source.page != null && (!Number.isInteger(source.page) || source.page < 1))
+        || ["url", "thread_id", "attachment_id", "chunk_id"].some((key) =>
+          source[key] !== undefined && typeof source[key] !== "string")
+        || (source.kind !== "document" && source.kind !== "web"))) throw malformed();
+      handlers.onSources?.(data.sources as ChatInspectorSource[]);
+    } else if (eventName === "token") {
+      if (typeof data.text !== "string") throw malformed();
+      handlers.onToken?.(data.text);
+    } else {
+      if (typeof data.message !== "string" || !data.message.trim()) throw malformed();
+      if (data.status_code !== undefined && (
+        !Number.isInteger(data.status_code) || Number(data.status_code) < 400
+        || Number(data.status_code) > 599
+      )) throw malformed();
+      if (data.retry_after !== undefined && data.retry_after !== null && (
+        typeof data.retry_after !== "number" || !Number.isFinite(data.retry_after)
+        || data.retry_after < 0
+      )) throw malformed();
+      terminal = true;
+      const error = data as unknown as StreamErrorEvent;
+      const message = withRetryHint(error.message, error.retry_after);
+      if (error.status_code === 401) handleAuthStatus(401, requestCsrfToken);
+      if (handlers.onError) handlers.onError({ ...error, message });
+      else throw new ChatStreamError(message, error.status_code, error.retry_after);
+    }
+  }
 
   try {
-    response =
-      await fetch(
-        `${API_URL}/chat/stream`,
-        {
-          method:
-            "POST",
-
-          headers: {
-            "Content-Type":
-              "application/json",
-
-            Accept:
-              "text/event-stream",
-          },
-
-          body:
-            JSON.stringify(
-              resolveChatRequest(
-                body,
-              ),
-            ),
-
-          signal,
-        },
-      );
-  } catch (
-    error
-  ) {
-    if (
-      error instanceof
-        DOMException &&
-      error.name ===
-        "AbortError"
-    ) {
-      throw error;
+    while (!terminal) {
+      signal?.throwIfAborted();
+      const { value, done } = await reader.read();
+      signal?.throwIfAborted();
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      let boundary: RegExpExecArray | null;
+      while ((boundary = /\r?\n\r?\n/.exec(buffer)) !== null) {
+        const block = buffer.slice(0, boundary.index);
+        buffer = buffer.slice(boundary.index + boundary[0].length);
+        signal?.throwIfAborted();
+        handleEventBlock(block);
+        if (terminal) return;
+      }
+      if (buffer.length > maximumFrameLength) throw malformed();
+      if (done) {
+        // A truncated frame is not completion, even when some answer text arrived.
+        throw new ChatStreamError("The response stream ended unexpectedly. Please retry.");
+      }
     }
-
-    if (
-      error instanceof
-        Error &&
-      error.name ===
-        "AbortError"
-    ) {
-      throw error;
+  } catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === "AbortError")
+        || error instanceof ChatStreamError) throw error;
+    throw new ChatStreamError("The response stream was interrupted. Please retry.");
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // A disconnected transport may already be closed.
     }
-
-    throw new Error(
-      backendUnavailableMessage(),
-    );
-  }
-
-  if (
-    !response.ok
-  ) {
-    const responseText =
-      await response.text();
-
-    throw new Error(
-      getErrorMessage(
-        responseText,
-
-        "Failed to start streaming response.",
-      ),
-    );
-  }
-
-  if (
-    !response.body
-  ) {
-    throw new Error(
-      "Streaming response body is unavailable.",
-    );
-  }
-
-  const reader =
-    response.body.getReader();
-
-  const decoder =
-    new TextDecoder();
-
-  let buffer =
-    "";
-
-  const handleEventBlock =
-    (
-      block:
-        string,
-    ) => {
-      const lines =
-        block.split(
-          /\r?\n/,
-        );
-
-      let eventName =
-        "message";
-
-      const dataLines:
-        string[] =
-          [];
-
-      for (
-        const line
-        of lines
-      ) {
-        if (
-          line.startsWith(
-            "event:",
-          )
-        ) {
-          eventName =
-            line
-              .slice(
-                "event:".length,
-              )
-              .trim();
-        } else if (
-          line.startsWith(
-            "data:",
-          )
-        ) {
-          dataLines.push(
-            line
-              .slice(
-                "data:".length,
-              )
-              .trimStart(),
-          );
-        }
-      }
-
-      if (
-        dataLines.length ===
-        0
-      ) {
-        return;
-      }
-
-      const rawData =
-        dataLines.join(
-          "\n",
-        );
-
-      let data:
-        unknown;
-
-      try {
-        data =
-          JSON.parse(
-            rawData,
-          );
-      } catch {
-        return;
-      }
-
-      if (
-        eventName ===
-          "start" &&
-        typeof data ===
-          "object" &&
-        data !== null
-      ) {
-        handlers.onStart?.(
-          data as StreamStartEvent,
-        );
-
-        return;
-      }
-
-      if (
-        eventName ===
-          "token" &&
-        typeof data ===
-          "object" &&
-        data !== null
-      ) {
-        const tokenData =
-          data as {
-            text?:
-              unknown;
-          };
-
-        if (
-          typeof tokenData.text ===
-          "string"
-        ) {
-          handlers.onToken?.(
-            tokenData.text,
-          );
-        }
-
-        return;
-      }
-
-      if (
-        eventName ===
-          "done" &&
-        typeof data ===
-          "object" &&
-        data !== null
-      ) {
-        handlers.onDone?.(
-          data as StreamDoneEvent,
-        );
-
-        return;
-      }
-
-      if (
-        eventName ===
-          "error" &&
-        typeof data ===
-          "object" &&
-        data !== null
-      ) {
-        handlers.onError?.(
-          data as StreamErrorEvent,
-        );
-      }
-    };
-
-  while (
-    true
-  ) {
-    const {
-      value,
-      done,
-    } =
-      await reader.read();
-
-    if (
-      done
-    ) {
-      break;
-    }
-
-    buffer +=
-      decoder.decode(
-        value,
-        {
-          stream:
-            true,
-        },
-      );
-
-    const eventBlocks =
-      buffer.split(
-        /\r?\n\r?\n/,
-      );
-
-    buffer =
-      eventBlocks.pop() ??
-      "";
-
-    for (
-      const eventBlock
-      of eventBlocks
-    ) {
-      if (
-        !eventBlock.trim()
-      ) {
-        continue;
-      }
-
-      handleEventBlock(
-        eventBlock,
-      );
-    }
-  }
-
-  buffer +=
-    decoder.decode();
-
-  if (
-    buffer.trim()
-  ) {
-    handleEventBlock(
-      buffer,
-    );
+    reader.releaseLock();
   }
 }
 
@@ -1294,7 +1150,7 @@ export async function connectGoogleDriveMCP(
 
     {
       method:
-        "GET",
+        "POST",
     },
 
     signal,
@@ -1328,7 +1184,7 @@ export async function connectSlackMCP(
 
     {
       method:
-        "GET",
+        "POST",
     },
 
     signal,
@@ -1348,4 +1204,12 @@ export async function disconnectSlackMCP(
 
     signal,
   );
+}
+
+export async function fetchModels(signal?: AbortSignal): Promise<ModelOption[]> {
+  const response = await authenticatedFetch(`${API_URL}/models`, { signal, cache: "no-store" });
+  if (!response.ok) throw new Error("Could not verify model availability.");
+  const data = await response.json();
+  if (!Array.isArray(data.models)) throw new Error("Invalid model catalog.");
+  return data.models;
 }

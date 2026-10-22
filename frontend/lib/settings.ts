@@ -45,9 +45,7 @@ function isAvailableModel(
       "string" &&
     MODELS.some(
       (model) =>
-        model.id ===
-          modelId &&
-        model.available,
+        model.id === modelId,
     )
   );
 }
