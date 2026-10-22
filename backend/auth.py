@@ -1,3 +1,4 @@
+
 """Cookie authentication, CSRF enforcement and the public sign-in endpoints."""
 
 from dataclasses import dataclass
@@ -321,7 +322,7 @@ def install_authentication(app: FastAPI) -> None:
         CORSMiddleware,
         allow_origins=list(settings.origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-CSRF-Token"],
         expose_headers=["Retry-After"],
     )

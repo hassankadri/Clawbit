@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
@@ -45,6 +46,10 @@ export default function LibraryPicker({
     let active = true;
 
     async function refresh() {
+      if (active) {
+        setLoading(true);
+      }
+
       try {
         const [savedFiles, savedFolders] = await Promise.all([
           getLibraryFiles(),
@@ -65,7 +70,6 @@ export default function LibraryPicker({
       }
     }
 
-    setLoading(true);
     void refresh();
 
     window.addEventListener("clawbit-library-updated", refresh);

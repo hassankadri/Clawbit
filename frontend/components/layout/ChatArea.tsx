@@ -259,7 +259,20 @@ export default function ChatArea({
         viewport.scrollTop = 0;
         lastScrollTopRef.current = 0;
 
-        setShowJumpToLatest(false);
+        /*
+         * Reset after layout, rather than calling
+         * setState synchronously inside the effect.
+         *
+         * Cancel if messages change again before
+         * this animation frame executes.
+         */
+        const frameId = window.requestAnimationFrame(() => {
+          setShowJumpToLatest(false);
+        });
+
+        return () => {
+          window.cancelAnimationFrame(frameId);
+        };
       } else {
         /*
          * Opening an existing conversation starts
