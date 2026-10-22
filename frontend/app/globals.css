@@ -1,9 +1,9 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
-/* ======================================================== */
-/* TAILWIND THEME TOKENS                                    */
-/* ======================================================== */
+/* ========================================================
+   TAILWIND THEME TOKENS
+   ======================================================== */
 
 @theme inline {
   --color-background: var(--background);
@@ -18,11 +18,24 @@
 
   --color-accent: var(--accent);
   --color-accent-hover: var(--accent-hover);
+
+  --font-sans:
+    "DM Sans",
+    "Segoe UI",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+
+  --font-mono:
+    "Cascadia Code",
+    "Consolas",
+    "SFMono-Regular",
+    monospace;
 }
 
-/* ======================================================== */
-/* LIGHT THEME                                              */
-/* ======================================================== */
+/* ========================================================
+   LIGHT THEME
+   ======================================================== */
 
 :root {
   color-scheme: light;
@@ -54,9 +67,9 @@
     0 20px 60px rgba(0, 0, 0, 0.14);
 }
 
-/* ======================================================== */
-/* DARK THEME                                               */
-/* ======================================================== */
+/* ========================================================
+   DARK THEME
+   ======================================================== */
 
 .dark {
   color-scheme: dark;
@@ -88,9 +101,9 @@
     0 24px 72px rgba(0, 0, 0, 0.58);
 }
 
-/* ======================================================== */
-/* DOCUMENT                                                 */
-/* ======================================================== */
+/* ========================================================
+   DOCUMENT AND TYPOGRAPHY
+   ======================================================== */
 
 html,
 body {
@@ -106,16 +119,20 @@ body {
   color: var(--foreground);
 
   font-family:
-    "Inter",
+    "DM Sans",
+    "Segoe UI",
     -apple-system,
     BlinkMacSystemFont,
-    "Segoe UI",
     sans-serif;
 
   font-size: 14px;
   font-weight: 400;
+  line-height: 1.55;
 
-  letter-spacing: -0.012em;
+  letter-spacing: -0.01em;
+
+  font-optical-sizing: auto;
+  font-feature-settings: "kern" 1, "liga" 1;
 
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -133,7 +150,10 @@ button,
 input,
 textarea,
 select {
-  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
 }
 
 button {
@@ -155,9 +175,57 @@ img {
   -webkit-user-drag: none;
 }
 
-/* ======================================================== */
-/* SELECTION                                                */
-/* ======================================================== */
+/* ========================================================
+   TYPOGRAPHY NORMALIZATION
+   ======================================================== */
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family:
+    "DM Sans",
+    "Segoe UI",
+    -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+
+  font-optical-sizing: auto;
+  text-wrap: pretty;
+}
+
+p,
+li {
+  text-wrap: pretty;
+}
+
+strong,
+b {
+  font-weight: 600;
+}
+
+code,
+pre,
+kbd,
+samp {
+  font-family:
+    "Cascadia Code",
+    "Consolas",
+    "SFMono-Regular",
+    "Liberation Mono",
+    monospace;
+  font-variant-ligatures: none;
+}
+
+pre {
+  tab-size: 2;
+}
+
+/* ========================================================
+   SELECTION
+   ======================================================== */
 
 ::selection {
   background: rgba(0, 0, 0, 0.12);
@@ -167,14 +235,9 @@ img {
   background: rgba(255, 255, 255, 0.16);
 }
 
-/* ======================================================== */
-/* FOCUS                                                    */
-/* ======================================================== */
-
-/*
- * Deliberately subtle.
- * No thick glowing focus rings.
- */
+/* ========================================================
+   FOCUS
+   ======================================================== */
 
 :focus {
   outline: none;
@@ -193,9 +256,9 @@ select:focus {
   box-shadow: none;
 }
 
-/* ======================================================== */
-/* TRANSITIONS                                              */
-/* ======================================================== */
+/* ========================================================
+   TRANSITIONS
+   ======================================================== */
 
 button,
 a,
@@ -216,9 +279,9 @@ textarea {
   resize: none;
 }
 
-/* ======================================================== */
-/* SCROLLBARS                                               */
-/* ======================================================== */
+/* ========================================================
+   SCROLLBARS
+   ======================================================== */
 
 * {
   scrollbar-width: thin;
@@ -239,7 +302,6 @@ textarea {
 
 ::-webkit-scrollbar-thumb {
   background: rgba(90, 90, 90, 0.30);
-
   border-radius: 999px;
 }
 
@@ -255,67 +317,50 @@ textarea {
   background: rgba(255, 255, 255, 0.22);
 }
 
-/* ======================================================== */
-/* SHARED UI COMPONENTS                                    */
-/* ======================================================== */
+/* ========================================================
+   SHARED UI COMPONENTS
+   ======================================================== */
 
 @layer components {
-  /* ------------------------------------------------------ */
-  /* SURFACES                                               */
-  /* ------------------------------------------------------ */
+  /* Surfaces */
 
   .ui-surface {
     border: 1px solid var(--border);
-
     background: var(--panel);
-
     color: var(--foreground);
-
     box-shadow: var(--shadow-soft);
   }
 
   .ui-surface-elevated {
     border: 1px solid var(--border);
-
     background: var(--surface);
-
     color: var(--foreground);
-
     box-shadow: var(--shadow-elevated);
   }
 
   .ui-card {
     border: 1px solid var(--border);
-
     background: var(--surface);
-
     color: var(--foreground);
   }
 
   .ui-card-quiet {
     border: 1px solid var(--border);
-
     background: var(--card);
-
     color: var(--foreground);
   }
 
-  /* ------------------------------------------------------ */
-  /* BUTTON BASE                                            */
-  /* ------------------------------------------------------ */
+  /* Button base */
 
   .ui-button {
     display: inline-flex;
-
     min-height: 40px;
 
     align-items: center;
     justify-content: center;
 
     gap: 8px;
-
     border-radius: 10px;
-
     padding: 10px 15px;
 
     font-size: 13px;
@@ -328,13 +373,10 @@ textarea {
       opacity 160ms ease;
   }
 
-  /* ------------------------------------------------------ */
-  /* PRIMARY BUTTON                                         */
-  /* ------------------------------------------------------ */
+  /* Primary button */
 
   .ui-button-primary {
     background: var(--accent);
-
     color: var(--accent-foreground);
   }
 
@@ -346,15 +388,11 @@ textarea {
     opacity: 0.38;
   }
 
-  /* ------------------------------------------------------ */
-  /* SECONDARY BUTTON                                       */
-  /* ------------------------------------------------------ */
+  /* Secondary button */
 
   .ui-button-secondary {
     border: 1px solid var(--border);
-
     background: var(--surface);
-
     color: var(--foreground);
   }
 
@@ -362,25 +400,19 @@ textarea {
     background: var(--accent-hover);
   }
 
-  /* ------------------------------------------------------ */
-  /* GHOST BUTTON                                           */
-  /* ------------------------------------------------------ */
+  /* Ghost button */
 
   .ui-button-ghost {
     background: transparent;
-
     color: var(--muted-foreground);
   }
 
   .ui-button-ghost:hover {
     background: var(--accent-hover);
-
     color: var(--foreground);
   }
 
-  /* ------------------------------------------------------ */
-  /* ICON BUTTON                                            */
-  /* ------------------------------------------------------ */
+  /* Icon button */
 
   .ui-icon-button {
     display: inline-flex;
@@ -389,12 +421,10 @@ textarea {
     height: 36px;
 
     flex-shrink: 0;
-
     align-items: center;
     justify-content: center;
 
     border-radius: 10px;
-
     background: transparent;
 
     color: var(--muted-foreground);
@@ -407,110 +437,83 @@ textarea {
 
   .ui-icon-button:hover {
     background: var(--accent-hover);
-
     color: var(--foreground);
   }
 
   .ui-icon-button:disabled {
     opacity: 0.35;
-
     cursor: not-allowed;
   }
 
-  /* ------------------------------------------------------ */
-  /* INPUT                                                  */
-  /* ------------------------------------------------------ */
+  /* Input */
 
   .ui-input {
     min-height: 40px;
 
     border: 1px solid var(--border);
-
     border-radius: 11px;
 
     background: var(--surface);
-
     color: var(--foreground);
 
     padding: 10px 14px;
-
     outline: none;
-
     box-shadow: none;
   }
 
   .ui-input::placeholder {
     color: var(--muted-foreground);
-
     opacity: 0.75;
   }
 
   .ui-input:focus,
   .ui-input:focus-visible {
     border-color: var(--border-strong);
-
     outline: none;
-
     box-shadow: none;
   }
 
-  /* ------------------------------------------------------ */
-  /* MENUS                                                  */
-  /* ------------------------------------------------------ */
+  /* Menus */
 
   .ui-menu-surface {
     border: 1px solid var(--border);
-
     border-radius: 15px;
 
     background: var(--surface);
-
     color: var(--foreground);
 
     box-shadow: var(--shadow-elevated);
 
     backdrop-filter: blur(18px);
-
     -webkit-backdrop-filter: blur(18px);
   }
 
-  /* ------------------------------------------------------ */
-  /* DIALOGS                                                */
-  /* ------------------------------------------------------ */
+  /* Dialogs */
 
   .ui-dialog-surface {
     border: 1px solid var(--border);
-
     border-radius: 18px;
 
     background: var(--surface);
-
     color: var(--foreground);
 
     box-shadow: var(--shadow-elevated);
 
     backdrop-filter: blur(18px);
-
     -webkit-backdrop-filter: blur(18px);
   }
 
-  /* ------------------------------------------------------ */
-  /* CHIPS                                                  */
-  /* ------------------------------------------------------ */
+  /* Chips */
 
   .ui-chip {
     border: 1px solid var(--border);
-
     border-radius: 999px;
 
     background: var(--surface-alt);
-
     color: var(--foreground);
   }
 
-  /* ------------------------------------------------------ */
-  /* VERY SUBTLE BACKGROUND LIGHT                          */
-  /* ------------------------------------------------------ */
+  /* Subtle background lighting */
 
   .clawbit-glow {
     background:
@@ -531,15 +534,13 @@ textarea {
   }
 }
 
-/* ======================================================== */
-/* SIDEBAR                                                  */
-/* ======================================================== */
+/* ========================================================
+   SIDEBAR
+   ======================================================== */
 
 .clawbit-sidebar-row {
   border-radius: 10px;
-
   background: transparent !important;
-
   color: #404040;
 
   transition:
@@ -552,7 +553,6 @@ textarea {
 .light .clawbit-sidebar-row:hover,
 html:not(.dark) .clawbit-sidebar-row:hover {
   background: rgba(0, 0, 0, 0.055) !important;
-
   color: #111111;
 }
 
@@ -561,7 +561,6 @@ html:not(.dark) .clawbit-sidebar-row:hover {
 .light .clawbit-sidebar-row[data-active="true"],
 html:not(.dark) .clawbit-sidebar-row[data-active="true"] {
   background: rgba(0, 0, 0, 0.075) !important;
-
   color: #111111;
 }
 
@@ -582,7 +581,6 @@ html:not(.dark) .clawbit-sidebar-row[data-active="true"]:hover {
 
 .dark .clawbit-sidebar-row:hover {
   background: #222222 !important;
-
   color: #ffffff;
 }
 
@@ -590,7 +588,6 @@ html:not(.dark) .clawbit-sidebar-row[data-active="true"]:hover {
 
 .dark .clawbit-sidebar-row[data-active="true"] {
   background: #292929 !important;
-
   color: #ffffff;
 }
 
@@ -600,9 +597,9 @@ html:not(.dark) .clawbit-sidebar-row[data-active="true"]:hover {
   background: #303030 !important;
 }
 
-/* ======================================================== */
-/* RADIX / INTERACTIVE STATES                               */
-/* ======================================================== */
+/* ========================================================
+   RADIX / INTERACTIVE STATES
+   ======================================================== */
 
 [data-radix-popper-content-wrapper] {
   z-index: 1200;
@@ -612,9 +609,9 @@ html:not(.dark) .clawbit-sidebar-row[data-active="true"]:hover {
   cursor: not-allowed;
 }
 
-/* ======================================================== */
-/* FORM NORMALIZATION                                       */
-/* ======================================================== */
+/* ========================================================
+   FORM NORMALIZATION
+   ======================================================== */
 
 input,
 textarea,
@@ -631,13 +628,12 @@ select {
 
 select option {
   background: var(--surface);
-
   color: var(--foreground);
 }
 
-/* ======================================================== */
-/* AUTOFILL                                                 */
-/* ======================================================== */
+/* ========================================================
+   AUTOFILL
+   ======================================================== */
 
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
@@ -656,26 +652,25 @@ textarea:-webkit-autofill:focus {
     0s;
 }
 
-/* ======================================================== */
-/* REDUCED MOTION                                           */
-/* ======================================================== */
+/* ========================================================
+   REDUCED MOTION
+   ======================================================== */
 
-@media (
-  prefers-reduced-motion:
-    reduce
-) {
+@media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     scroll-behavior: auto !important;
 
     transition-duration: 0.01ms !important;
-
     animation-duration: 0.01ms !important;
-
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ========================================================
+   CHAT ANIMATION
+   ======================================================== */
 
 @keyframes chat-message-enter {
   from {

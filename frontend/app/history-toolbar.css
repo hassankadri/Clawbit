@@ -1,0 +1,60 @@
+/*
+ * Clawbit — Legacy history toolbar
+ *
+ * Hide the legacy developer-facing controls without
+ * changing conversation history, revisions, or memory
+ * storage and synchronization logic.
+ *
+ * This selector targets the toolbar directly beneath
+ * the global application header.
+ */
+
+main.h-screen > div > header + div[aria-live="polite"] {
+  display: contents;
+}
+
+/*
+ * Hide toolbar controls and instructional text.
+ * Keep actual error alerts visible.
+ */
+
+main.h-screen
+  > div
+  > header
+  + div[aria-live="polite"]
+  > :not([role="alert"]) {
+  display: none !important;
+}
+
+/*
+ * Preserve history error visibility.
+ */
+
+main.h-screen
+  > div
+  > header
+  + div[aria-live="polite"]
+  > [role="alert"] {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  z-index: 1300;
+
+  width: max-content;
+  max-width: min(90vw, 520px);
+
+  padding: 12px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+
+  background: var(--surface);
+  color: var(--foreground);
+
+  box-shadow: var(--shadow-elevated);
+
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+
+  transform: translateX(-50%);
+}

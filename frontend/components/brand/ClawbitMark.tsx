@@ -83,7 +83,7 @@ function LogoWordmark({
       )}
     >
       <span className="text-inherit">Clawbit</span>
-      <span className="text-[0.55em] font-semibold uppercase tracking-[0.28em] text-violet-500">
+      <span className="text-[0.55em] font-semibold uppercase tracking-[0.28em] text-[color:var(--muted-foreground)]">
         AI
       </span>
     </div>

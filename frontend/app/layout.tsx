@@ -3,7 +3,9 @@ import type { Metadata } from "next";
 import ThemeProvider from "@/components/providers/ThemeProvider";
 import AppShell from "@/components/layout/AppShell";
 import AuthProvider from "@/components/auth/AuthProvider";
+
 import "./globals.css";
+import "./history-toolbar.css";
 
 export const metadata: Metadata = {
   title: "Clawbit AI",
