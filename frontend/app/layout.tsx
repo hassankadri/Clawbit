@@ -1,8 +1,10 @@
+
 import type { Metadata } from "next";
 
 import ThemeProvider from "@/components/providers/ThemeProvider";
 import AppShell from "@/components/layout/AppShell";
 import AuthProvider from "@/components/auth/AuthProvider";
+import MCPApprovalDialog from "@/components/mcp/MCPApprovalDialog";
 
 import "./globals.css";
 import "./history-toolbar.css";
@@ -26,6 +28,7 @@ export default function RootLayout({
         <ThemeProvider>
           <AuthProvider>
             <AppShell>{children}</AppShell>
+            <MCPApprovalDialog />
           </AuthProvider>
         </ThemeProvider>
       </body>

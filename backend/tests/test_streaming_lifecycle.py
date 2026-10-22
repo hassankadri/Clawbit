@@ -445,6 +445,8 @@ def test_cancelled_mcp_tool_retains_safe_reusable_connection(owner_client, monke
                 await asyncio.Event().wait()
             return "MCP answer"
 
+        fixture_mcp.metadata = {"readOnlyHint": True}
+
         class Client:
             def __init__(self, connections):
                 pass

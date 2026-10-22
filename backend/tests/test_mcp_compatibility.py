@@ -19,6 +19,8 @@ def connector(monkeypatch):
         """Return the offline fixture identity."""
         return {"login": "offline-fixture"}
 
+    get_me.metadata = {"readOnlyHint": True}
+
     class Client:
         def __init__(self, connections):
             calls.append(connections)

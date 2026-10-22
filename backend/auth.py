@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from starlette.exceptions import HTTPException
@@ -92,6 +93,10 @@ def _failure(status: int, message: str) -> JSONResponse:
     return JSONResponse(
         {"detail": message}, status_code=status, headers={"Cache-Control": "no-store"}
     )
+
+
+class MCPApprovalDecision(BaseModel):
+    approve: bool
 
 
 class AuthenticationMiddleware:
@@ -191,7 +196,11 @@ class AuthenticationMiddleware:
                 operation = "chat"
             elif request.url.path == "/attachments/upload":
                 operation = "upload"
-            elif request.url.path.startswith("/mcp/") and "/disconnect/" not in request.url.path:
+            elif (
+                request.url.path.startswith("/mcp/")
+                and "/disconnect/" not in request.url.path
+                and not request.url.path.startswith("/mcp/approvals")
+            ):
                 operation = "mcp"
             with request_budget():
                 if operation is None:
@@ -307,6 +316,10 @@ def install_authentication(app: FastAPI) -> None:
 
     @app.post("/auth/logout")
     async def logout(request: Request) -> JSONResponse:
+        from mcp_approval import cancel_pending_approvals
+
+        cancel_pending_approvals()
+
         token = request.cookies.get(settings.cookie_name, "")
         await run_in_threadpool(app.state.auth_store.revoke, token)
         response = JSONResponse({"success": True})
@@ -316,6 +329,26 @@ def install_authentication(app: FastAPI) -> None:
             httponly=True, samesite="lax",
         )
         return response
+
+    @app.get("/mcp/approvals")
+    async def list_mcp_approvals() -> JSONResponse:
+        from mcp_approval import pending_approvals
+
+        return JSONResponse({"pending": pending_approvals()})
+
+    @app.post("/mcp/approvals/{approval_id}")
+    async def resolve_mcp_approval(
+        approval_id: str,
+        decision: MCPApprovalDecision,
+    ) -> JSONResponse:
+        from mcp_approval import decide_approval
+
+        if not decide_approval(approval_id, decision.approve):
+            return JSONResponse(
+                {"detail": "Approval expired or not found."},
+                status_code=404,
+            )
+        return JSONResponse({"resolved": True})
 
     app.add_middleware(AuthenticationMiddleware, application=app, settings=settings)
     app.add_middleware(

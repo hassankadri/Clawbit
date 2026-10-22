@@ -27,6 +27,7 @@ def fake_connector(monkeypatch):
                 calls.append(connections)
                 return "private result"
 
+            private_tool.metadata = {"readOnlyHint": True}
             return [private_tool]
 
     monkeypatch.setattr(mcp, "MultiServerMCPClient", Client)
@@ -281,6 +282,8 @@ def test_mcp_artifacts_and_schema_survive_guarded_execution(fake_connector, monk
         """Return both public content and an artifact."""
         return query, {"offline": True}
 
+    result.metadata = {"readOnlyHint": True}
+
     async def discover(*args):
         return [result]
 
@@ -309,6 +312,8 @@ def test_disconnect_cancels_active_tool_session(fake_connector, monkeypatch):
                 await asyncio.Event().wait()
             finally:
                 closed.append(True)
+
+        slow_tool.metadata = {"readOnlyHint": True}
 
         async def discover(*args):
             return [slow_tool]
