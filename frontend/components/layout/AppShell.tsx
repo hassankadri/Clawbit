@@ -61,6 +61,7 @@ import {
 import type { Theme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 import { getAuthState } from "@/lib/auth";
+import { deleteChatAttachmentPreviews } from "@/lib/chatAttachmentPreviews";
 import {
   listHistory, loadHistory, updateHistory, deleteHistory, historySnapshot,
   importLegacyConversation, type ConversationRecord, type LegacyConversation,
@@ -1847,19 +1848,65 @@ export default function AppShell({
   }
 
   async function deleteConversation(id: string) {
-    const item = conversationHistory.find((entry) => entry.id === id);
+    const item = conversationHistory.find(
+      (entry) => entry.id === id,
+    );
+
     if (!item?.snapshot.serverPersisted) {
-      setHistoryNotice("Import this browser conversation before deleting it from server history. The original local copy is retained.");
+      setHistoryNotice(
+        "Import this browser conversation before deleting it from server history. The original local copy is retained.",
+      );
       return;
     }
-    if (appSettings.confirmDestructiveActions && !window.confirm("Delete this conversation from active history? Saved revisions, checkpoints and attachments will be retained for recovery.")) return;
+
+    if (
+      appSettings.confirmDestructiveActions &&
+      !window.confirm(
+        "Delete this conversation from active history? Saved revisions, checkpoints and attachments will be retained for recovery.",
+      )
+    ) {
+      return;
+    }
+
     try {
-      await deleteHistory(await loadHistory(item.snapshot.threadId));
-      if (createSnapshotRef.current().threadId === item.snapshot.threadId) clearChat();
-      setConversationHistory((current) => current.filter((entry) => entry.id !== id));
+      const saved = await loadHistory(item.snapshot.threadId);
+
+      // Only remove local previews after the server confirms deletion.
+      await deleteHistory(saved);
+
+      const attachmentIds = [
+        ...new Set(
+          (saved.messages ?? item.snapshot.messages).flatMap(
+            (message) => message.attachmentIds ?? [],
+          ),
+        ),
+      ];
+
+      if (
+        createSnapshotRef.current().threadId ===
+        item.snapshot.threadId
+      ) {
+        clearChat();
+      }
+
+      setConversationHistory((current) =>
+        current.filter((entry) => entry.id !== id),
+      );
       historyRefreshRef.current();
+
+      try {
+        await deleteChatAttachmentPreviews(attachmentIds);
+      } catch {
+        setHistoryNotice(
+          "Conversation deleted, but some browser previews could not be cleared.",
+        );
+      }
     } catch (error) {
-      setHistoryNotice(error instanceof Error ? error.message : "Could not delete history.");
+      setHistoryNotice(
+        error instanceof Error
+          ? error.message
+          : "Could not delete history.",
+      );
     }
   }
 

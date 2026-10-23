@@ -18,6 +18,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableConfig
 
 from owned_checkpoints import OwnedSqliteSaver
+from agent_cache import cached_agent, get_checkpointer, close_checkpointers
 from ownership import current_owner, require_active_owner
 from usage_limits import UsageLimitError, reserve_tool_calls
 
@@ -2019,56 +2020,14 @@ async def build_agent(
 
 
 
-    conn = (
-
-        await aiosqlite.connect(
-
-            str(
-
-                CHECKPOINT_DB_PATH
-
-            )
-
-        )
-
+    # Share a checkpoint saver between compiled agents.
+    # Eviction never closes an active request's connection.
+    checkpointer = await get_checkpointer(
+        CHECKPOINT_DB_PATH,
+        _CHECKPOINT_CONNECTIONS,
     )
 
-
-
-    _CHECKPOINT_CONNECTIONS.append(
-
-        conn
-
-    )
-
-
-
-    checkpointer = (
-
-        OwnedSqliteSaver(
-
-            conn
-
-        )
-
-    )
-
-
-
-    return (
-
-        workflow.compile(
-
-            checkpointer=
-
-                checkpointer
-
-        )
-
-    )
-
-
-
+    return workflow.compile(checkpointer=checkpointer)
 
 
 # =========================================================
@@ -2217,54 +2176,19 @@ async def get_agent(
 
 
 
-    if (
-
-        cache_key
-
-        not in
-
-        _AGENT_CACHE
-
-    ):
-
-        _AGENT_CACHE[
-
-            cache_key
-
-        ] = (
-
-            await build_agent(
-
-                selected_model,
-
-                selected_mode,
-
-                mcp_tools=
-
-                    mcp_tools,
-
-                streaming=
-
-                    streaming,
-
-            )
-
+    async def construct_agent():
+        return await build_agent(
+            selected_model,
+            selected_mode,
+            mcp_tools=mcp_tools,
+            streaming=streaming,
         )
 
-
-
-    return (
-
-        _AGENT_CACHE[
-
-            cache_key
-
-        ]
-
+    return await cached_agent(
+        _AGENT_CACHE,
+        cache_key,
+        construct_agent,
     )
-
-
-
 
 
 # =========================================================
@@ -2276,43 +2200,6 @@ async def get_agent(
 
 
 async def close_agent_resources() -> None:
-
-    """
-
-    Close long-lived SQLite connections used by cached
-
-    LangGraph agents when FastAPI shuts down.
-
-    """
-
-
-
-    while (
-
-        _CHECKPOINT_CONNECTIONS
-
-    ):
-
-        conn = (
-
-            _CHECKPOINT_CONNECTIONS
-
-            .pop()
-
-        )
-
-
-
-        try:
-
-            await conn.close()
-
-
-
-        except Exception:
-
-            pass
-
-
-
+    """Close checkpoint resources during application shutdown."""
     _AGENT_CACHE.clear()
+    await close_checkpointers(_CHECKPOINT_CONNECTIONS)

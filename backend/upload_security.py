@@ -8,7 +8,7 @@ import re
 import stat
 import warnings
 import zipfile
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 
 from PIL import Image
 from pypdf import PdfReader

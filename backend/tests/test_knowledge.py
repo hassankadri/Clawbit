@@ -1,3 +1,4 @@
+
 """Offline provenance, source authorization and durable memory regressions."""
 
 import sqlite3
@@ -15,7 +16,7 @@ import memory_store
 import ownership
 import rag
 import tool
-from memory_store import MemoryError, MemoryStore
+from memory_store import MemoryStoreError, MemoryStore
 from ownership import OwnershipError, bind_resources, current_owner, owner_context
 
 
@@ -147,7 +148,7 @@ def test_memory_http_confirmation_versions_and_deletion(owner_client):
     "-----BEGIN RSA PRIVATE KEY-----", "eyJabc.def.ghi",
 ])
 def test_sensitive_memory_is_rejected_before_persistence(content):
-    with pytest.raises(MemoryError, match="Credentials"):
+    with pytest.raises(MemoryStoreError, match="Credentials"):
         memory_store.store.save(content, "user", None)
     assert not memory_store.store.path.exists()
 
@@ -205,7 +206,7 @@ def test_concurrent_duplicate_memory_and_stale_updates():
             try:
                 MemoryStore(path).change(identifier, 0, "workspace", "project", f"Updated preference {index}")
                 return True
-            except MemoryError:
+            except MemoryStoreError:
                 return False
 
     with ThreadPoolExecutor(max_workers=4) as executor:

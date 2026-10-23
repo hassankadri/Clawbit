@@ -59,7 +59,7 @@ from usage_limits import UsageLimitError
 from history_api import router as history_router
 from history_store import HistoryError
 from knowledge_api import router as knowledge_router
-from memory_store import MemoryError
+from memory_store import MemoryStoreError
 from evidence import resolve_answer, source_snapshot
 from observability import RequestLoggingMiddleware, configure_logging, event
 
@@ -134,10 +134,10 @@ app.include_router(history_router)
 app.include_router(knowledge_router)
 
 
-@app.exception_handler(MemoryError)
+@app.exception_handler(MemoryStoreError)
 @app.exception_handler(HistoryError)
-async def history_error_handler(request: Request, exc: HistoryError | MemoryError):
-    event("memory" if isinstance(exc, MemoryError) else "history", "failed",
+async def history_error_handler(request: Request, exc: HistoryError | MemoryStoreError):
+    event("memory" if isinstance(exc, MemoryStoreError) else "history", "failed",
           error=exc, status_code=exc.status_code, category="persistence")
     return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
 
@@ -1023,11 +1023,11 @@ async def _complete_connector_oauth(
             try:
                 await refresh_mcp_tools()
             except Exception:
-                # Credentials remain connected; the owner can retry tool discovery.
-                pass
+                # Never log provider tokens or exception text.
+                event("mcp", "failed", category="oauth_tool_discovery")
         except Exception:
-            # OAuth provider errors can contain codes or credentials. Never reflect them.
-            pass
+            # Provider errors may contain authorization codes.
+            event("mcp", "failed", category="oauth_callback")
     elif state:
         discard_oauth_state(state, provider, request.state.auth_session.token_hash)
     query = {"mcp": provider, "status": status}
@@ -1556,7 +1556,7 @@ async def chat_stream(
 
     async def event_stream():
         sent_text = False
-        answer_text = ""
+        answer_parts = []
         sent_sources = []
         final_message = None
         streamed_ids = set()
@@ -1570,10 +1570,11 @@ async def chat_stream(
             # Close LangGraph before releasing this request's thread/concurrency leases.
             async with aclosing(stream):
                 async for stream_mode, chunk in stream:
-                    sources = source_snapshot()
-                    if sources != sent_sources:
-                        sent_sources = sources
-                        yield _sse_event("sources", {"sources": sources})
+                    if stream_mode == "values":
+                        sources = source_snapshot()
+                        if sources != sent_sources:
+                            sent_sources = sources
+                            yield _sse_event("sources", {"sources": sources})
                     if stream_mode == "messages":
                         message_chunk, metadata = chunk
                         if metadata.get("langgraph_node") != "chatbot":
@@ -1581,7 +1582,7 @@ async def chat_stream(
                         text = extract_text_content(message_chunk)
                         if text:
                             sent_text = True
-                            answer_text += text
+                            answer_parts.append(text)
                             if getattr(message_chunk, "id", None):
                                 streamed_ids.add(message_chunk.id)
                             yield _sse_event("token", {"text": text})
@@ -1595,6 +1596,12 @@ async def chat_stream(
                         ):
                             final_message = messages[-1]
 
+            # Capture sources after the last values frame.
+            sources = source_snapshot()
+            if sources != sent_sources:
+                sent_sources = sources
+                yield _sse_event("sources", {"sources": sources})
+
             # Keep the existing final-only provider fallback without replaying deltas.
             if final_message is not None and (
                 not sent_text
@@ -1603,10 +1610,11 @@ async def chat_stream(
                 final_text = extract_text_content(final_message)
                 if final_text:
                     sent_text = True
-                    answer_text += final_text
+                    answer_parts.append(final_text)
                     yield _sse_event("token", {"text": final_text})
             if not sent_text:
                 raise ModelError("The provider returned no answer text. Please retry.", 502)
+            answer_text = "".join(answer_parts)
             resolve_answer(answer_text, inspector, research=req.mode == "research")
             yield _sse_event("done", {"thread_id": thread_id, "inspector": inspector})
         except Exception as exc:

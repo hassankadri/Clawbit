@@ -15,6 +15,12 @@ from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from ownership import current_owner, require_active_owner
+from mcp_credentials import (
+    CredentialStoreError,
+    save_record,
+    load_record,
+    invalidate_record,
+)
 from usage_limits import limited
 import usage_limits
 
@@ -169,6 +175,22 @@ def _save_token(
         epoch = usage_limits.store.connector_epoch(
             provider, advance=not refreshing, expected=expected_epoch,
         )
+        stored = {
+            "access_token": access_token,
+            "refresh_token": payload.get("refresh_token"),
+            "expires_at": expires_at,
+            "connection_epoch": epoch,
+        }
+
+        try:
+            save_record(
+                provider,
+                "oauth",
+                stored,
+                epoch,
+            )
+        except CredentialStoreError:
+            raise RuntimeError(OAUTH_ERROR) from None
         _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
         _oauth_tokens[key] = {
             "access_token": access_token, "refresh_token": payload.get("refresh_token"),
@@ -181,6 +203,18 @@ def get_oauth_token_record(provider: str) -> dict | None:
     with _store_lock:
         key = _key(provider)
         record = _oauth_tokens.get(key)
+        if record is None:
+            try:
+                recovered = load_record(provider)
+            except CredentialStoreError:
+                recovered = None
+
+            if recovered and recovered["kind"] == "oauth":
+                restored = dict(recovered["value"])
+                restored["connection_epoch"] = recovered["epoch"]
+
+                _oauth_tokens[key] = restored
+                record = restored
         if record and record["connection_epoch"] != usage_limits.store.connector_epoch(provider):
             _oauth_tokens.pop(key, None)
             _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
@@ -192,6 +226,10 @@ def disconnect_oauth_provider(provider: str) -> None:
     key = _key(provider)
     with _store_lock:
         usage_limits.store.connector_epoch(provider, advance=True)
+        try:
+            invalidate_record(provider)
+        except CredentialStoreError:
+            pass
         _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
         _oauth_tokens.pop(key, None)
         for state, record in list(_oauth_states.items()):

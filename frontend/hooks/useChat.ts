@@ -14,6 +14,7 @@ import {
   type ChatMode,
 } from "@/lib/api";
 import { createHistory, loadHistory, historySnapshot, removeHistoryMessage } from "@/lib/history";
+import { deleteChatAttachmentPreviews } from "@/lib/chatAttachmentPreviews";
 
 import {
   DEFAULT_MODEL_ID,
@@ -605,7 +606,31 @@ export default function useChat(options: { persistent?: boolean } = {}) {
       }
       if (!window.confirm("Remove this message and all following messages from the current conversation? The earlier revision will remain saved.")) return;
       const selection = selectionRef.current;
+      const oldAttachmentIds = messagesRef.current.flatMap(
+        (message) => message.attachmentIds ?? [],
+      );
+
       void removeHistoryMessage(threadId, messageId, saved.historyVersion).then((record) => {
+        const retainedIds = new Set(
+          (record.messages ?? []).flatMap(
+            (message) => message.attachmentIds ?? [],
+          ),
+        );
+
+        const removedIds = [
+          ...new Set(oldAttachmentIds),
+        ].filter((id) => !retainedIds.has(id));
+
+        // Server deletion succeeded; clean previews no longer referenced
+        // by the current conversation. Keep Library copies unchanged.
+        void deleteChatAttachmentPreviews(removedIds).catch(() => {
+          if (selection === selectionRef.current) {
+            setHistoryError(
+              "Message removed, but a browser preview could not be cleared.",
+            );
+          }
+        });
+
         if (selection !== selectionRef.current) return;
         historyRef.current = historySnapshot(record);
         replaceMessages(record.messages ?? []);

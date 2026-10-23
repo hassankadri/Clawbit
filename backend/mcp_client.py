@@ -14,6 +14,12 @@ from typing import Any
 from langchain_core.tools import StructuredTool, ToolException
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from mcp_credentials import (
+    CredentialStoreError,
+    save_record,
+    load_record,
+    invalidate_record,
+)
 from mcp_oauth import (
     disconnect_oauth_provider,
     get_google_drive_access_token,
@@ -86,6 +92,43 @@ def _state() -> ConnectorState:
                 cancel_pending_approvals(provider)
                 _cancel_sessions(state, provider)
 
+    # Restore explicitly connected token providers after restart.
+    with state.lock:
+        for provider, builder in (
+            ("github", _github_connection),
+            ("notion", _notion_connection),
+            ("stripe", _stripe_connection),
+        ):
+            if provider in state.connections:
+                continue
+
+            try:
+                record = load_record(provider)
+
+                if record is None or record["kind"] != "token":
+                    continue
+
+                token = record["value"].get("token")
+
+                if not isinstance(token, str):
+                    raise CredentialStoreError(
+                        "Invalid stored connector token."
+                    )
+
+                config = builder(token)
+                epoch = usage_limits.store.connector_epoch(
+                    provider
+                )
+
+                if epoch != record["epoch"]:
+                    continue
+
+                state.connections[provider] = config
+                state.epochs[provider] = epoch
+                state.generation += 1
+
+            except (CredentialStoreError, ValueError):
+                state.errors[provider] = CONNECTION_ERROR
     return state
 
 
@@ -750,10 +793,31 @@ async def _connect_token(
             "error": "Invalid connector credential format.",
         }
 
-    return await _connect_token_server(
+    result = await _connect_token_server(
         server_id,
         config,
     )
+
+    if result.get("success"):
+        try:
+            epoch = _state().epochs[server_id]
+
+            save_record(
+                server_id,
+                "token",
+                {"token": token.strip()},
+                epoch,
+            )
+
+        except (CredentialStoreError, KeyError):
+            _disconnect_runtime_server(server_id)
+
+            return {
+                "success": False,
+                "error": CONNECTION_ERROR,
+            }
+
+    return result
 
 
 def _disconnect_runtime_server(
@@ -779,6 +843,10 @@ def _disconnect_runtime_server(
             server_id,
             None,
         )
+        try:
+            invalidate_record(server_id)
+        except CredentialStoreError:
+            state.errors[server_id] = CONNECTION_ERROR
         state.errors.pop(
             server_id,
             None,

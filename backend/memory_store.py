@@ -14,7 +14,7 @@ import ownership
 from ownership import OwnershipError, current_owner, require_active_owner, require_workspace
 
 
-class MemoryError(Exception):
+class MemoryStoreError(Exception):
     def __init__(self, message: str, status_code: int = 409):
         super().__init__(message)
         self.status_code = status_code
@@ -23,7 +23,7 @@ class MemoryError(Exception):
 def checked_memory(content: str) -> str:
     text = " ".join(content.split())
     if not text or len(text) > 2000:
-        raise MemoryError("Memory must contain between 1 and 2,000 characters.", 422)
+        raise MemoryStoreError("Memory must contain between 1 and 2,000 characters.", 422)
     patterns = (
         r"(?i)\b(password|passwd|api[_ -]?key|access[_ -]?token|session[_ -]?(cookie|token)|secret)\s*[:=]",
         r"(?i)\bbearer\s+\S+", r"\b(?:sk-|gh[pousr]_|AIza)[A-Za-z0-9_-]{12,}",
@@ -31,7 +31,7 @@ def checked_memory(content: str) -> str:
         r"-----BEGIN .*PRIVATE KEY-----", r"\b[A-Za-z0-9_+/=-]{48,}\b",
     )
     if any(re.search(pattern, text) for pattern in patterns):
-        raise MemoryError("Credentials and sensitive tokens cannot be saved as memory.", 422)
+        raise MemoryStoreError("Credentials and sensitive tokens cannot be saved as memory.", 422)
     return text
 
 
@@ -57,7 +57,7 @@ class MemoryStore:
                 ).fetchone()
                 if schema:
                     if db.execute("SELECT version FROM memory_schema").fetchone() != (1,):
-                        raise MemoryError("Unsupported memory schema.", 503)
+                        raise MemoryStoreError("Unsupported memory schema.", 503)
                 else:
                     if existed:
                         backup = self.path.with_name(f"{self.path.name}.memory-{time.time_ns()}.backup")
@@ -85,7 +85,7 @@ class MemoryStore:
                         COMMIT;
                     """)
                 if db.execute("PRAGMA foreign_key_check").fetchone():
-                    raise MemoryError("Memory integrity check failed.", 503)
+                    raise MemoryStoreError("Memory integrity check failed.", 503)
             self._initialized = True
 
     @contextmanager
@@ -100,10 +100,10 @@ class MemoryStore:
     def scope_workspace(scope: str, workspace: str | None, *, create: bool = False) -> str:
         require_active_owner()
         if scope not in {"workspace", "user"}:
-            raise MemoryError("Unknown memory scope.", 422)
+            raise MemoryStoreError("Unknown memory scope.", 422)
         target = user_workspace() if scope == "user" else workspace
         if not target:
-            raise MemoryError("Choose a workspace for this memory.", 422)
+            raise MemoryStoreError("Choose a workspace for this memory.", 422)
         require_workspace(target, create=create)
         return target
 
@@ -121,7 +121,7 @@ class MemoryStore:
         require_active_owner()
         target = user_workspace() if scope == "user" else workspace
         if scope not in {"workspace", "user"} or not target:
-            raise MemoryError("Choose a valid memory scope.", 422)
+            raise MemoryStoreError("Choose a valid memory scope.", 422)
         ownership.store.authorize("workspace", target, missing_ok=True)
         if target not in ownership.store.owned_ids("workspace"):
             return []
@@ -173,12 +173,12 @@ class MemoryStore:
             if row is None:
                 raise OwnershipError()
             if row["version"] != version:
-                raise MemoryError("Memory changed. Reload before updating it.")
+                raise MemoryStoreError("Memory changed. Reload before updating it.")
             if value is not None and any(
                 item["id"] != memory_id and isinstance(item["memory"], str)
                 and " ".join(item["memory"].split()).casefold() == value.casefold() for item in rows
             ):
-                raise MemoryError("That memory is already saved.")
+                raise MemoryStoreError("That memory is already saved.")
             now = int(time.time() * 1000)
             db.execute(
                 "INSERT INTO memory_details VALUES(?,?,?,?,?) ON CONFLICT(memory_id) "
@@ -203,7 +203,7 @@ class MemoryStore:
         for item in candidates:
             try:
                 content = checked_memory(item["content"])
-            except MemoryError:
+            except MemoryStoreError:
                 continue
             score = len(tokens & set(re.findall(r"[\w]+", content.casefold())))
             if score:

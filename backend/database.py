@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import os
 from upload_security import validate_thread_id
@@ -19,6 +19,11 @@ from sqlalchemy.orm import (
     declarative_base,
     sessionmaker,
 )
+
+
+def _utc_now_naive() -> datetime:
+    """Keep existing UTC-naive SQLite fields without deprecated utcnow()."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
@@ -65,12 +70,12 @@ class Workspace(Base):
 
     created_at = Column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
     )
 
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
     )
 
 
@@ -102,12 +107,12 @@ class Conversation(Base):
 
     created_at = Column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
     )
 
     updated_at = Column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
     )
 
 
@@ -136,7 +141,7 @@ class ChatMessage(Base):
 
     created_at = Column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
     )
 
 
@@ -164,7 +169,7 @@ class LongTermMemory(Base):
 
     created_at = Column(
         DateTime,
-        default=datetime.utcnow,
+        default=_utc_now_naive,
     )
 
 
@@ -284,15 +289,15 @@ def ensure_workspace(
                     name
                     or "Default Workspace"
                 ),
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=_utc_now_naive(),
+                updated_at=_utc_now_naive(),
             )
 
             db.add(workspace)
 
         else:
             workspace.updated_at = (
-                datetime.utcnow()
+                _utc_now_naive()
             )
 
             if name:
@@ -352,8 +357,8 @@ def create_or_update_conversation(
                 thread_id=thread_id,
                 workspace_id=workspace_id,
                 title=title,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=_utc_now_naive(),
+                updated_at=_utc_now_naive(),
             )
 
             db.add(conversation)
@@ -364,7 +369,7 @@ def create_or_update_conversation(
             )
 
             conversation.updated_at = (
-                datetime.utcnow()
+                _utc_now_naive()
             )
 
         db.commit()
@@ -424,7 +429,7 @@ def save_chat_message(
             workspace_id=workspace_id,
             role=role,
             content=content,
-            created_at=datetime.utcnow(),
+            created_at=_utc_now_naive(),
         )
 
         db.add(msg)
@@ -440,7 +445,7 @@ def save_chat_message(
 
         if conversation:
             conversation.updated_at = (
-                datetime.utcnow()
+                _utc_now_naive()
             )
 
         db.commit()

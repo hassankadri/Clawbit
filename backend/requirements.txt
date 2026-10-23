@@ -29,3 +29,4 @@ rank-bm25==0.2.2
 flashrank==0.2.10
 aiosqlite==0.22.1
 mcp==1.30.0
+defusedxml==0.7.1

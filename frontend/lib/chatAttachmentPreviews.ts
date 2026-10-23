@@ -1,4 +1,9 @@
 
+import {
+  getAuthState,
+  subscribeAuth,
+} from "@/lib/auth";
+
 export type ChatAttachmentKind = "image" | "document";
 
 export interface ChatAttachmentPreview {
@@ -14,8 +19,47 @@ const DATABASE_VERSION = 1;
 const STORE_NAME = "previews";
 const UPDATE_EVENT = "clawbit:chat-attachment-preview-saved";
 
+let generation = 0;
+let pendingMutations: Promise<void> = Promise.resolve();
+let previousOwner = getAuthState().user?.principal_id ?? null;
+
+const deletedIds = new Set<string>();
+
+function currentOwner(): string | null {
+  const state = getAuthState();
+  return state.status === "authenticated"
+    ? state.user?.principal_id ?? null
+    : null;
+}
+
+function queueMutation(
+  operation: () => Promise<void>,
+): Promise<void> {
+  const result = pendingMutations.then(operation, operation);
+  pendingMutations = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+function emitChange(id: string): void {
+  if (typeof window === "undefined") return;
+
+  window.dispatchEvent(
+    new CustomEvent(UPDATE_EVENT, {
+      detail: { id },
+    }),
+  );
+}
+
 function openDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    if (typeof indexedDB === "undefined") {
+      reject(new Error("Browser preview storage is unavailable."));
+      return;
+    }
+
     const request = indexedDB.open(
       DATABASE_NAME,
       DATABASE_VERSION,
@@ -31,10 +75,20 @@ function openDatabase(): Promise<IDBDatabase> {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const database = request.result;
+
+      // Allow another tab to delete the database on logout.
+      database.onversionchange = () => database.close();
+
+      resolve(database);
+    };
 
     request.onerror = () =>
-      reject(request.error ?? new Error("Cannot open preview storage."));
+      reject(
+        request.error ??
+          new Error("Cannot open preview storage."),
+      );
   });
 }
 
@@ -53,8 +107,14 @@ async function createThumbnail(file: File): Promise<Blob | null> {
 
       const canvas = document.createElement("canvas");
 
-      canvas.width = Math.max(1, Math.round(image.width * scale));
-      canvas.height = Math.max(1, Math.round(image.height * scale));
+      canvas.width = Math.max(
+        1,
+        Math.round(image.width * scale),
+      );
+      canvas.height = Math.max(
+        1,
+        Math.round(image.height * scale),
+      );
 
       const context = canvas.getContext("2d");
 
@@ -75,8 +135,6 @@ async function createThumbnail(file: File): Promise<Blob | null> {
       image.close();
     }
   } catch {
-    // Some formats and browsers cannot create ImageBitmaps.
-    // Use the original only when its size is reasonably small.
     return file.size <= 1024 * 1024 ? file : null;
   }
 }
@@ -86,63 +144,105 @@ export async function saveChatAttachmentPreview(
   file: File,
   kind: ChatAttachmentKind,
 ): Promise<void> {
-  if (!id.trim()) return;
+  const owner = currentOwner();
+  if (!owner || !id.trim() || deletedIds.has(id)) return;
+
+  const startedGeneration = generation;
 
   const thumbnail =
     kind === "image" ? await createThumbnail(file) : null;
 
-  const record: ChatAttachmentPreview = {
-    id,
-    name: file.name,
-    kind,
-    mimeType: file.type || "application/octet-stream",
-    thumbnail,
-  };
+  await queueMutation(async () => {
+    if (
+      generation !== startedGeneration ||
+      currentOwner() !== owner ||
+      deletedIds.has(id)
+    ) {
+      return;
+    }
 
-  const database = await openDatabase();
+    const record: ChatAttachmentPreview = {
+      id,
+      name: file.name,
+      kind,
+      mimeType: file.type || "application/octet-stream",
+      thumbnail,
+    };
 
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(
-        STORE_NAME,
-        "readwrite",
-      );
+    const database = await openDatabase();
 
-      transaction.objectStore(STORE_NAME).put(record);
+    try {
+      // Recheck after the asynchronous database open.
+      if (
+        generation !== startedGeneration ||
+        currentOwner() !== owner ||
+        deletedIds.has(id)
+      ) {
+        return;
+      }
 
-      transaction.oncomplete = () => resolve();
-
-      transaction.onerror = () =>
-        reject(
-          transaction.error ??
-            new Error("Cannot save attachment preview."),
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction(
+          STORE_NAME,
+          "readwrite",
         );
 
-      transaction.onabort = () =>
-        reject(
-          transaction.error ??
-            new Error("Attachment preview save was cancelled."),
-        );
-    });
-  } finally {
-    database.close();
-  }
+        transaction.objectStore(STORE_NAME).put(record);
 
-  window.dispatchEvent(
-    new CustomEvent(UPDATE_EVENT, {
-      detail: { id },
-    }),
-  );
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () =>
+          reject(
+            transaction.error ??
+              new Error("Cannot save attachment preview."),
+          );
+        transaction.onabort = () =>
+          reject(
+            transaction.error ??
+              new Error("Attachment preview save was cancelled."),
+          );
+      });
+    } finally {
+      database.close();
+    }
+
+    if (
+      generation === startedGeneration &&
+      currentOwner() === owner &&
+      !deletedIds.has(id)
+    ) {
+      emitChange(id);
+    }
+  });
 }
 
 export async function getChatAttachmentPreviews(
   ids: string[],
 ): Promise<ChatAttachmentPreview[]> {
-  if (!ids.length) return [];
+  const owner = currentOwner();
+  const startedGeneration = generation;
+
+  if (!owner || !ids.length) return [];
+
+  // Wait for queued deletions before reading the database.
+  await pendingMutations;
+
+  if (
+    generation !== startedGeneration ||
+    currentOwner() !== owner
+  ) {
+    return [];
+  }
 
   const database = await openDatabase();
 
   try {
+    if (
+      generation !== startedGeneration ||
+      currentOwner() !== owner
+    ) {
+      return [];
+    }
+
     const transaction = database.transaction(
       STORE_NAME,
       "readonly",
@@ -155,12 +255,18 @@ export async function getChatAttachmentPreviews(
         (id) =>
           new Promise<ChatAttachmentPreview | null>(
             (resolve, reject) => {
+              if (deletedIds.has(id)) {
+                resolve(null);
+                return;
+              }
+
               const request = store.get(id);
 
               request.onsuccess = () =>
                 resolve(
-                  (request.result as ChatAttachmentPreview | undefined) ??
-                    null,
+                  (request.result as
+                    | ChatAttachmentPreview
+                    | undefined) ?? null,
                 );
 
               request.onerror = () =>
@@ -173,12 +279,115 @@ export async function getChatAttachmentPreviews(
       ),
     );
 
+    if (
+      generation !== startedGeneration ||
+      currentOwner() !== owner
+    ) {
+      return [];
+    }
+
     return results.filter(
-      (item): item is ChatAttachmentPreview => item !== null,
+      (item): item is ChatAttachmentPreview =>
+        item !== null && !deletedIds.has(item.id),
     );
   } finally {
     database.close();
   }
 }
+
+export function deleteChatAttachmentPreviews(
+  ids: string[],
+): Promise<void> {
+  const owner = currentOwner();
+  if (!owner) return Promise.resolve();
+
+  const uniqueIds = [
+    ...new Set(ids.filter((id) => typeof id === "string" && id.length > 0)),
+  ];
+
+  if (!uniqueIds.length) return Promise.resolve();
+
+  uniqueIds.forEach((id) => deletedIds.add(id));
+
+  return queueMutation(async () => {
+    if (currentOwner() !== owner) return;
+
+    const database = await openDatabase();
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction(
+          STORE_NAME,
+          "readwrite",
+        );
+        const store = transaction.objectStore(STORE_NAME);
+
+        uniqueIds.forEach((id) => store.delete(id));
+
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () =>
+          reject(
+            transaction.error ??
+              new Error("Cannot delete attachment previews."),
+          );
+        transaction.onabort = () =>
+          reject(
+            transaction.error ??
+              new Error("Attachment preview deletion was cancelled."),
+          );
+      });
+    } finally {
+      database.close();
+    }
+
+    uniqueIds.forEach(emitChange);
+  });
+}
+
+export function purgeAllChatAttachmentPreviews(): Promise<void> {
+  // Invalidate pending image compression and saved-preview writes
+  // immediately, before the asynchronous deletion begins.
+  generation += 1;
+  deletedIds.clear();
+
+  return queueMutation(async () => {
+    if (typeof indexedDB === "undefined") return;
+
+    await new Promise<void>((resolve, reject) => {
+      const request = indexedDB.deleteDatabase(DATABASE_NAME);
+
+      request.onsuccess = () => resolve();
+      request.onerror = () =>
+        reject(
+          request.error ??
+            new Error("Cannot clear attachment previews."),
+        );
+      request.onblocked = () =>
+        reject(
+          new Error("Another tab is blocking preview cleanup."),
+        );
+    });
+
+    emitChange("");
+  });
+}
+
+export function waitForChatAttachmentPreviewCleanup(): Promise<void> {
+  return pendingMutations;
+}
+
+// Covers explicit logout, session expiry, 401, and owner changes.
+subscribeAuth(() => {
+  const nextOwner = currentOwner();
+
+  if (previousOwner && previousOwner !== nextOwner) {
+    void purgeAllChatAttachmentPreviews().catch(() => {
+      // The session is already revoked. Never restore access merely
+      // because browser storage could not be cleared.
+    });
+  }
+
+  previousOwner = nextOwner;
+});
 
 export const CHAT_ATTACHMENT_PREVIEW_EVENT = UPDATE_EVENT;

@@ -1,5 +1,5 @@
 
-"""Cookie authentication, CSRF enforcement and the public sign-in endpoints."""
+"""Cookie authentication, CSRF enforcement and public sign-in endpoints."""
 
 from dataclasses import dataclass
 import hmac
@@ -13,12 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from starlette.exceptions import HTTPException
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from auth_store import (
     AuthStore,
     LoginThrottled,
+    PreSessionThrottled,
     PRESESSION_SECONDS,
     SESSION_SECONDS,
     Session,
@@ -46,15 +47,21 @@ class AuthSettings:
         mode = os.getenv("CLAWBIT_AUTH_MODE", "local")
         if mode not in {"local", "production"}:
             raise ValueError("CLAWBIT_AUTH_MODE must be local or production.")
+
         secure = mode == "production"
         raw_origins = os.getenv("CLAWBIT_ALLOWED_ORIGINS", "")
         if secure and not raw_origins:
-            raise ValueError("Production requires explicit CLAWBIT_ALLOWED_ORIGINS.")
+            raise ValueError(
+                "Production requires explicit CLAWBIT_ALLOWED_ORIGINS."
+            )
+
         origins = tuple(
-            part.strip() for part in (
+            part.strip()
+            for part in (
                 raw_origins or "http://localhost:3000,http://127.0.0.1:3000"
             ).split(",")
         )
+
         for origin in origins:
             parsed = urlsplit(origin)
             if (
@@ -69,15 +76,24 @@ class AuthSettings:
                 or (secure and parsed.scheme != "https")
                 or (
                     not secure
-                    and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}
+                    and parsed.hostname not in {
+                        "localhost", "127.0.0.1", "::1"
+                    }
                 )
             ):
-                raise ValueError("Allowed origins must be exact, trusted web origins.")
+                raise ValueError(
+                    "Allowed origins must be exact, trusted web origins."
+                )
         return cls(origins=origins, secure=secure)
 
 
 def auth_database_path() -> Path:
-    root = Path(os.getenv("CLAWBIT_RUNTIME_DIR", Path(__file__).resolve().parent))
+    root = Path(
+        os.getenv(
+            "CLAWBIT_RUNTIME_DIR",
+            Path(__file__).resolve().parent,
+        )
+    )
     return root / "data" / "auth.sqlite3"
 
 
@@ -88,10 +104,20 @@ def _failure(status: int, message: str) -> JSONResponse:
         "HTTPS is required.": "transport",
         "Remote access requires production authentication settings.": "transport",
         "Too many sign-in attempts. Try again in a minute.": "rate",
+        "Too many session requests. Try again in a minute.": "rate",
     }.get(message, "authentication")
-    event("auth", "denied", status_code=status, category=category)
+
+    event(
+        "auth",
+        "denied",
+        status_code=status,
+        category=category,
+    )
+
     return JSONResponse(
-        {"detail": message}, status_code=status, headers={"Cache-Control": "no-store"}
+        {"detail": message},
+        status_code=status,
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -100,63 +126,94 @@ class MCPApprovalDecision(BaseModel):
 
 
 class AuthenticationMiddleware:
-    """Deny protected requests before bodies, providers or streaming are consumed."""
+    """Deny protected requests before bodies or streaming are consumed."""
 
-    def __init__(self, app: ASGIApp, application: FastAPI, settings: AuthSettings):
+    def __init__(
+        self,
+        app: ASGIApp,
+        application: FastAPI,
+        settings: AuthSettings,
+    ):
         self.app = app
         self.application = application
         self.settings = settings
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def __call__(
+        self,
+        scope: Scope,
+        receive: Receive,
+        send: Send,
+    ) -> None:
         if scope["type"] == "websocket":
             await send({"type": "websocket.close", "code": 1008})
             return
+
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
         request = Request(scope)
         settings = self.settings
+
         if settings.secure and request.url.scheme != "https":
-            await _failure(403, "HTTPS is required.")(scope, receive, send)
+            await _failure(
+                403, "HTTPS is required."
+            )(scope, receive, send)
             return
+
         if (
             not settings.secure
-            and request.url.hostname not in {"localhost", "127.0.0.1", "::1"}
+            and request.url.hostname not in {
+                "localhost", "127.0.0.1", "::1"
+            }
         ):
-            await _failure(403, "Remote access requires production authentication settings.")(
-                scope, receive, send
-            )
+            await _failure(
+                403,
+                "Remote access requires production authentication settings.",
+            )(scope, receive, send)
             return
+
         origin = request.headers.get("origin")
         if origin is not None and origin not in settings.origins:
-            await _failure(403, "Origin is not allowed.")(scope, receive, send)
+            await _failure(
+                403, "Origin is not allowed."
+            )(scope, receive, send)
             return
 
         store: AuthStore = self.application.state.auth_store
         token = request.cookies.get(settings.cookie_name, "")
         session = await run_in_threadpool(store.lookup, token)
         scope.setdefault("state", {})["auth_session"] = session
+
         public = (request.method, request.url.path) in {
-            ("GET", "/"), ("GET", "/auth/session"), ("POST", "/auth/login")
+            ("GET", "/"),
+            ("GET", "/auth/session"),
+            ("POST", "/auth/login"),
         }
         if not public and (
-            session is None or session.username is None or session.principal_id is None
+            session is None
+            or session.username is None
+            or session.principal_id is None
         ):
-            await _failure(401, "Sign in to continue.")(scope, receive, send)
+            await _failure(
+                401, "Sign in to continue."
+            )(scope, receive, send)
             return
+
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             provided = request.headers.get("x-csrf-token", "")
             if (
                 origin not in settings.origins
                 or session is None
                 or not hmac.compare_digest(
-                    provided.encode("utf-8"), csrf_token(token).encode("ascii")
+                    provided.encode("utf-8"),
+                    csrf_token(token).encode("ascii"),
                 )
             ):
-                await _failure(403, "Session verification failed. Reload and try again.")(
-                    scope, receive, send
-                )
+                await _failure(
+                    403,
+                    "Session verification failed. Reload and try again.",
+                )(scope, receive, send)
                 return
 
         async def send_private(message: Message) -> None:
@@ -171,27 +228,39 @@ class AuthenticationMiddleware:
             await send(message)
 
         downstream_receive = receive
-        if request.url.path.startswith(("/mcp/", "/history", "/memories")) and request.method in {"POST", "PATCH"}:
+        if (
+            request.url.path.startswith(
+                ("/mcp/", "/history", "/memories")
+            )
+            and request.method in {"POST", "PATCH"}
+        ):
             received_bytes = 0
-            body_limit = 4 * 1024 * 1024 if request.url.path.startswith("/history") else 16384
+            body_limit = (
+                4 * 1024 * 1024
+                if request.url.path.startswith("/history")
+                else 16384
+            )
 
             async def receive_connector_body() -> Message:
                 nonlocal received_bytes
                 message = await receive()
                 received_bytes += len(message.get("body", b""))
                 if received_bytes > body_limit:
-                    raise HTTPException(413, "Request is too large.")
+                    raise HTTPException(
+                        413, "Request is too large."
+                    )
                 return message
 
             downstream_receive = receive_connector_body
 
-        # ASGI scope includes the complete streaming response. ContextVars also
-        # propagate to asyncio tasks and AnyIO/asyncio worker threads.
         with owner_context(
             session.principal_id if session else None,
-            validate_session=lambda: store.lookup(token) == session and session is not None,
+            validate_session=lambda: (
+                store.lookup(token) == session and session is not None
+            ),
         ):
             operation = None
+
             if request.url.path in {"/chat", "/chat/stream"}:
                 operation = "chat"
             elif request.url.path == "/attachments/upload":
@@ -202,26 +271,42 @@ class AuthenticationMiddleware:
                 and not request.url.path.startswith("/mcp/approvals")
             ):
                 operation = "mcp"
+
             with request_budget():
                 if operation is None:
-                    await self.app(scope, downstream_receive, send_private)
+                    await self.app(
+                        scope, downstream_receive, send_private
+                    )
                 else:
                     try:
-                        # Admission happens before body parsing or SSE headers.
                         with operation_budget(operation):
                             if operation == "chat":
                                 await run_chat_request(
-                                    self.app, scope, downstream_receive, send_private,
+                                    self.app,
+                                    scope,
+                                    downstream_receive,
+                                    send_private,
                                 )
                             else:
-                                await self.app(scope, downstream_receive, send_private)
+                                await self.app(
+                                    scope,
+                                    downstream_receive,
+                                    send_private,
+                                )
                     except UsageLimitError as exc:
                         response = JSONResponse(
-                            {"detail": str(exc), "retry_after": exc.retry_after},
+                            {
+                                "detail": str(exc),
+                                "retry_after": exc.retry_after,
+                            },
                             status_code=429,
-                            headers={"Retry-After": str(exc.retry_after)},
+                            headers={
+                                "Retry-After": str(exc.retry_after)
+                            },
                         )
-                        await response(scope, receive, send_private)
+                        await response(
+                            scope, receive, send_private
+                        )
 
 
 def _session_response(
@@ -234,15 +319,24 @@ def _session_response(
 ) -> JSONResponse:
     username = session.username if session else None
     response = JSONResponse({
-        "user": {"username": username, "principal_id": session.principal_id} if username else None,
+        "user": (
+            {
+                "username": username,
+                "principal_id": session.principal_id,
+            }
+            if username else None
+        ),
         "csrf_token": csrf_token(token),
         "expires_at": session.expires_at if session else None,
     })
+
     if new_cookie:
         response.set_cookie(
             settings.cookie_name,
             token,
-            max_age=SESSION_SECONDS if username else PRESESSION_SECONDS,
+            max_age=(
+                SESSION_SECONDS if username else PRESESSION_SECONDS
+            ),
             httponly=True,
             secure=settings.secure or secure_transport,
             samesite="lax",
@@ -252,7 +346,7 @@ def _session_response(
 
 
 def install_authentication(app: FastAPI) -> None:
-    """Install one default-deny boundary, including any routes added in the future."""
+    """Install one default-deny boundary for all application routes."""
     settings = AuthSettings.from_environment()
     app.state.auth_settings = settings
     app.state.auth_store = AuthStore(auth_database_path())
@@ -263,29 +357,58 @@ def install_authentication(app: FastAPI) -> None:
         token = request.cookies.get(settings.cookie_name, "")
         session = request.state.auth_session
         new_cookie = session is None
+
         if new_cookie:
-            token, _ = await run_in_threadpool(store.create_presession)
-            session = await run_in_threadpool(store.lookup, token)
+            # Read only the transport peer. Do not trust an arbitrary
+            # X-Forwarded-For header provided by the browser.
+            client_address = (
+                request.client.host if request.client else "unknown"
+            )
+            try:
+                token, _ = await run_in_threadpool(
+                    store.create_presession,
+                    client_address,
+                )
+            except PreSessionThrottled:
+                response = _failure(
+                    429,
+                    "Too many session requests. Try again in a minute.",
+                )
+                response.headers["Retry-After"] = "60"
+                return response
+
+            session = await run_in_threadpool(
+                store.lookup,
+                token,
+            )
+
         return _session_response(
-            settings, token, session, new_cookie=new_cookie,
+            settings,
+            token,
+            session,
+            new_cookie=new_cookie,
             secure_transport=request.url.scheme == "https",
         )
 
     @app.post("/auth/login")
     async def login(request: Request) -> JSONResponse:
-        # Avoid validation errors that echo password input and bound parsing work.
         body = bytearray()
         async for chunk in request.stream():
             if len(body) + len(chunk) > 4096:
                 return _failure(400, "Invalid sign-in request.")
             body.extend(chunk)
+
         try:
             payload = json.loads(body)
         except (ValueError, UnicodeDecodeError):
             return _failure(400, "Invalid sign-in request.")
+
         if not isinstance(payload, dict):
             return _failure(400, "Invalid sign-in request.")
-        username, password = payload.get("username"), payload.get("password")
+
+        username = payload.get("username")
+        password = payload.get("password")
+
         if (
             not isinstance(username, str)
             or not 1 <= len(username) <= 64
@@ -293,24 +416,51 @@ def install_authentication(app: FastAPI) -> None:
             or not 1 <= len(password) <= 128
         ):
             return _failure(401, "Invalid username or password.")
+
         try:
             password.encode("utf-8")
         except UnicodeEncodeError:
             return _failure(401, "Invalid username or password.")
+
         store = app.state.auth_store
-        previous = request.cookies.get(settings.cookie_name, "")
+        previous = request.cookies.get(
+            settings.cookie_name, ""
+        )
+        client_address = (
+            request.client.host if request.client else "unknown"
+        )
+
         try:
-            result = await run_in_threadpool(store.login, username, password, previous)
+            result = await run_in_threadpool(
+                store.login,
+                username,
+                password,
+                previous,
+                client_address,
+            )
         except LoginThrottled:
-            response = _failure(429, "Too many sign-in attempts. Try again in a minute.")
+            response = _failure(
+                429,
+                "Too many sign-in attempts. Try again in a minute.",
+            )
             response.headers["Retry-After"] = "60"
             return response
+
         if result is None:
-            return _failure(401, "Invalid username or password.")
+            return _failure(
+                401, "Invalid username or password."
+            )
+
         token, _ = result
-        session = await run_in_threadpool(store.lookup, token)
+        session = await run_in_threadpool(
+            store.lookup, token
+        )
+
         return _session_response(
-            settings, token, session, new_cookie=True,
+            settings,
+            token,
+            session,
+            new_cookie=True,
             secure_transport=request.url.scheme == "https",
         )
 
@@ -321,12 +471,17 @@ def install_authentication(app: FastAPI) -> None:
         cancel_pending_approvals()
 
         token = request.cookies.get(settings.cookie_name, "")
-        await run_in_threadpool(app.state.auth_store.revoke, token)
+        await run_in_threadpool(
+            app.state.auth_store.revoke, token
+        )
+
         response = JSONResponse({"success": True})
         response.delete_cookie(
-            settings.cookie_name, path="/",
+            settings.cookie_name,
+            path="/",
             secure=settings.secure or request.url.scheme == "https",
-            httponly=True, samesite="lax",
+            httponly=True,
+            samesite="lax",
         )
         return response
 
@@ -334,7 +489,9 @@ def install_authentication(app: FastAPI) -> None:
     async def list_mcp_approvals() -> JSONResponse:
         from mcp_approval import pending_approvals
 
-        return JSONResponse({"pending": pending_approvals()})
+        return JSONResponse({
+            "pending": pending_approvals()
+        })
 
     @app.post("/mcp/approvals/{approval_id}")
     async def resolve_mcp_approval(
@@ -343,19 +500,30 @@ def install_authentication(app: FastAPI) -> None:
     ) -> JSONResponse:
         from mcp_approval import decide_approval
 
-        if not decide_approval(approval_id, decision.approve):
+        if not decide_approval(
+            approval_id,
+            decision.approve,
+        ):
             return JSONResponse(
                 {"detail": "Approval expired or not found."},
                 status_code=404,
             )
         return JSONResponse({"resolved": True})
 
-    app.add_middleware(AuthenticationMiddleware, application=app, settings=settings)
+    app.add_middleware(
+        AuthenticationMiddleware,
+        application=app,
+        settings=settings,
+    )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.origins),
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-CSRF-Token"],
+        allow_methods=[
+            "GET", "POST", "PATCH", "DELETE", "OPTIONS"
+        ],
+        allow_headers=[
+            "Content-Type", "X-CSRF-Token"
+        ],
         expose_headers=["Retry-After"],
     )

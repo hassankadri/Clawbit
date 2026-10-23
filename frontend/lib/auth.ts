@@ -139,6 +139,15 @@ export async function signOut(): Promise<void> {
     throw new Error("Could not sign out. Check your connection and try again.");
   }
   expireSession();
+
+  // Complete the browser-preview purge after successful logout.
+  // A storage failure must never restore a revoked session.
+  try {
+    const previews = await import("./chatAttachmentPreviews");
+    await previews.purgeAllChatAttachmentPreviews();
+  } catch {
+    // Browsers with unavailable or blocked IndexedDB remain signed out.
+  }
 }
 
 export function authenticatedHeaders(): Record<string, string> {
