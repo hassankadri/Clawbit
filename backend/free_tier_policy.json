@@ -1,0 +1,10 @@
+{
+  "confirmed_on": "2026-10-19",
+  "confirmation": "User confirmed both accounts are free-only with billing disabled.",
+  "google": true,
+  "groq": true,
+  "key_fingerprints": {
+    "google": "61c5e86b05b8acba7af44be991b25fa5d0634b07064c27053abf9ce565966f22",
+    "groq": "d9533cda73291642a65d188b87b4d454e672d6afb302e0d4a4b038813dcc87d9"
+  }
+}
