@@ -23,7 +23,7 @@ jobs:
         working-directory: backend
     env:
       PYTHON_DOTENV_DISABLED: "1"
-      CLAWBIT_RUNTIME_DIR: ${{ runner.temp }}/clawbit-offline
+      CLAWBIT_RUNTIME_DIR: ${{ github.workspace }}/.clawbit-offline
       GOOGLE_API_KEY: test-google-key
       GROQ_API_KEY: test-groq-key
       OPENROUTER_API_KEY: test-openrouter-key
