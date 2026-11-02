@@ -5,6 +5,7 @@ from contextlib import closing, contextmanager
 from dataclasses import dataclass
 import hashlib
 import hmac
+import ipaddress
 from pathlib import Path
 import re
 import secrets
@@ -23,7 +24,12 @@ MAX_SOURCE_ATTEMPTS = 30
 
 # Anonymous pre-session admission limits.
 PRESESSION_ISSUE_WINDOW_SECONDS = 60
-MAX_PRESESSION_ISSUES_PER_SOURCE = 20
+MAX_PRESESSION_ISSUES_PER_SOURCE = 5
+
+# Global protection against distributed pre-session floods.
+# With 10-minute anonymous sessions, 60 issues/minute keeps the
+# maximum expected active issuance well below the 1,024-session cap.
+MAX_GLOBAL_PRESESSION_ISSUES_PER_WINDOW = 60
 MAX_ACTIVE_PRESESSIONS = 1024
 
 SCRYPT_N = 131072
@@ -45,6 +51,33 @@ class PreSessionThrottled(Exception):
 
 def token_digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _normalize_client_address(client_address: str) -> str:
+    """Normalize a client IP address for consistent rate-limit buckets.
+
+    IPv6 addresses in the same /64 share one bucket. IPv4 addresses remain
+    individually bucketed, and IPv4-mapped IPv6 addresses are treated as IPv4.
+    Invalid or missing addresses share an "unknown" bucket.
+    """
+    candidate = (client_address or "").strip()
+    if not candidate:
+        return "unknown"
+
+    # A zone identifier identifies a local interface, not a different client.
+    candidate = candidate.split("%", 1)[0]
+
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        return "unknown"
+
+    if isinstance(address, ipaddress.IPv6Address):
+        if address.ipv4_mapped is not None:
+            return str(address.ipv4_mapped)
+        return str(ipaddress.ip_network(f"{address}/64", strict=False))
+
+    return str(address)
 
 
 def csrf_token(token: str) -> str:
@@ -345,15 +378,20 @@ class AuthStore:
         self,
         client_address: str = "unknown",
     ) -> tuple[str, float]:
-        """Issue a bounded anonymous session across backend workers.
+        """Issue a globally and per-source bounded anonymous session.
 
-        Existing authenticated sessions do not count toward this cap.
+        Existing authenticated sessions do not count toward the active cap.
         The address must be supplied by the HTTP transport, not read
         directly from X-Forwarded-For.
+
+        The global issuance budget is shared across all sources and backend
+        workers through the same SQLite transaction.
         """
+        normalized_address = _normalize_client_address(client_address)
         source_bucket = token_digest(
-            f"clawbit-presession-source-v1:{client_address}"
+            f"clawbit-presession-source-v1:{normalized_address}"
         )
+        global_bucket = token_digest("clawbit-presession-global-v1")
 
         with self.connection() as connection:
             # Serialize capacity checks and inserts across processes.
@@ -366,11 +404,14 @@ class AuthStore:
                 (now,),
             )
 
-            # Retain only the current anonymous issuance window.
+            # Remove expired per-source and global issuance windows.
             connection.execute(
                 """
                 DELETE FROM login_attempts
-                WHERE scope = 'presession_issuance'
+                WHERE scope IN (
+                    'presession_issuance',
+                    'presession_global'
+                )
                   AND window_started <= ?
                 """,
                 (now - PRESESSION_ISSUE_WINDOW_SECONDS,),
@@ -388,6 +429,18 @@ class AuthStore:
                 raise PreSessionThrottled
 
             try:
+                # First enforce the instance-wide budget. This prevents a
+                # distributed set of IPs from filling the session capacity.
+                self._charge_login_bucket(
+                    connection,
+                    scope="presession_global",
+                    bucket=global_bucket,
+                    now=now,
+                    maximum=MAX_GLOBAL_PRESESSION_ISSUES_PER_WINDOW,
+                    window_seconds=PRESESSION_ISSUE_WINDOW_SECONDS,
+                )
+
+                # Then enforce the individual normalized source budget.
                 self._charge_login_bucket(
                     connection,
                     scope="presession_issuance",
@@ -408,9 +461,10 @@ class AuthStore:
         previous_token: str,
         client_address: str = "unknown",
     ) -> tuple[str, float] | None:
-        """Limit attempts by pre-session and network source across workers."""
+        """Limit attempts by pre-session and normalized network source."""
+        normalized_address = _normalize_client_address(client_address)
         source_bucket = token_digest(
-            f"clawbit-login-source-v1:{client_address}"
+            f"clawbit-login-source-v1:{normalized_address}"
         )
         session_bucket = token_digest(previous_token)
 
