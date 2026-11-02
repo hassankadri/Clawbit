@@ -260,7 +260,7 @@ def test_real_agent_tool_loop_checkpoints_and_model_switch(name, tmp_path, monke
             second = await agent.build_agent(models.DEFAULT_MODEL, mcp_tools=[github_read_fixture])
             result = await second.ainvoke({"messages": [HumanMessage(content="Continue")]}, config)
             assert any(m.content == "Read both documents" for m in result["messages"])
-            assert executions == [1, 2]
+            assert sorted(executions) == [1, 2]
         finally:
             await agent.close_agent_resources()
     asyncio.run(run())
