@@ -1,6 +1,7 @@
 
 """Offline tests for production HTTPS and trusted reverse proxies."""
 
+from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
@@ -17,27 +18,90 @@ API_ORIGIN = "http://api.clawbit.example"
 
 @pytest.fixture
 def production_settings(monkeypatch):
+    monkeypatch.setenv("CLAWBIT_AUTH_MODE", "production")
+    monkeypatch.setenv("CLAWBIT_ALLOWED_ORIGINS", FRONTEND_ORIGIN)
+    monkeypatch.setenv("CLAWBIT_TRUSTED_PROXIES", "127.0.0.1")
+
+    # Use a valid key for non-Windows production configuration tests.
     monkeypatch.setenv(
-        "CLAWBIT_AUTH_MODE",
-        "production",
-    )
-    monkeypatch.setenv(
-        "CLAWBIT_ALLOWED_ORIGINS",
-        FRONTEND_ORIGIN,
-    )
-    monkeypatch.setenv(
-        "CLAWBIT_TRUSTED_PROXIES",
-        "127.0.0.1",
-    )
-    monkeypatch.delenv(
-        "CLAWBIT_BACKEND_BIND_HOST",
-        raising=False,
-    )
-    monkeypatch.delenv(
-        "CLAWBIT_BACKEND_PORT",
-        raising=False,
+        "CLAWBIT_MCP_STATE_KEY",
+        Fernet.generate_key().decode("ascii"),
     )
 
+    monkeypatch.delenv("CLAWBIT_BACKEND_BIND_HOST", raising=False)
+    monkeypatch.delenv("CLAWBIT_BACKEND_PORT", raising=False)
+
+
+# ============================================================
+# MCP ENCRYPTION KEY VALIDATION
+# ============================================================
+
+@pytest.mark.parametrize("value", ["", " "])
+def test_non_windows_requires_mcp_state_key(value):
+    with pytest.raises(
+        ValueError,
+        match="requires CLAWBIT_MCP_STATE_KEY",
+    ):
+        production_server.validate_mcp_state_key(
+            value,
+            platform_name="posix",
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "not-a-fernet-key",
+        "short",
+        "A" * 43,
+        "é" * 44,
+    ],
+)
+def test_non_windows_rejects_invalid_mcp_state_key(value):
+    with pytest.raises(
+        ValueError,
+        match="valid Fernet key",
+    ):
+        production_server.validate_mcp_state_key(
+            value,
+            platform_name="posix",
+        )
+
+
+def test_non_windows_accepts_valid_mcp_state_key():
+    key = Fernet.generate_key().decode("ascii")
+
+    production_server.validate_mcp_state_key(
+        key,
+        platform_name="posix",
+    )
+
+
+def test_windows_does_not_require_fernet_key():
+    production_server.validate_mcp_state_key(
+        "",
+        platform_name="nt",
+    )
+
+
+def test_production_configuration_rejects_missing_mcp_state_key(
+    production_settings,
+    monkeypatch,
+):
+    monkeypatch.delenv("CLAWBIT_MCP_STATE_KEY")
+
+    with pytest.raises(
+        ValueError,
+        match="requires CLAWBIT_MCP_STATE_KEY",
+    ):
+        production_server.production_config_from_environment(
+            platform_name="posix",
+        )
+
+
+# ============================================================
+# PRODUCTION PROXY TEST HELPERS
+# ============================================================
 
 def create_production_application(tmp_path):
     application = FastAPI()
@@ -74,6 +138,10 @@ def request_session(
         )
 
 
+# ============================================================
+# TRUSTED PROXY TESTS
+# ============================================================
+
 def test_trusted_proxy_can_forward_real_https(
     tmp_path,
     production_settings,
@@ -93,9 +161,7 @@ def test_trusted_proxy_can_forward_real_https(
 
     cookie = response.headers["set-cookie"]
 
-    assert cookie.startswith(
-        "__Host-clawbit_session="
-    )
+    assert cookie.startswith("__Host-clawbit_session=")
     assert "Secure" in cookie
     assert "HttpOnly" in cookie
 
@@ -171,6 +237,10 @@ def test_direct_https_remains_valid(
     assert "Secure" in response.headers["set-cookie"]
 
 
+# ============================================================
+# TRUSTED PROXY CONFIGURATION TESTS
+# ============================================================
+
 @pytest.mark.parametrize(
     "value",
     [
@@ -190,9 +260,7 @@ def test_direct_https_remains_valid(
 )
 def test_invalid_proxy_configuration_is_rejected(value):
     with pytest.raises(ValueError):
-        production_server.parse_trusted_proxies(
-            value
-        )
+        production_server.parse_trusted_proxies(value)
 
 
 def test_valid_proxy_addresses_and_networks():
@@ -207,13 +275,12 @@ def test_duplicate_trusted_proxy_is_removed():
     ) == "127.0.0.1"
 
 
-def test_local_auth_mode_is_rejected(
-    monkeypatch,
-):
-    monkeypatch.setenv(
-        "CLAWBIT_AUTH_MODE",
-        "local",
-    )
+# ============================================================
+# PRODUCTION ENVIRONMENT VALIDATION TESTS
+# ============================================================
+
+def test_local_auth_mode_is_rejected(monkeypatch):
+    monkeypatch.setenv("CLAWBIT_AUTH_MODE", "local")
 
     with pytest.raises(
         ValueError,
@@ -226,9 +293,7 @@ def test_production_requires_explicit_proxies(
     production_settings,
     monkeypatch,
 ):
-    monkeypatch.delenv(
-        "CLAWBIT_TRUSTED_PROXIES",
-    )
+    monkeypatch.delenv("CLAWBIT_TRUSTED_PROXIES")
 
     with pytest.raises(
         ValueError,
@@ -269,14 +334,15 @@ def test_invalid_port_is_rejected(
     monkeypatch,
     port,
 ):
-    monkeypatch.setenv(
-        "CLAWBIT_BACKEND_PORT",
-        port,
-    )
+    monkeypatch.setenv("CLAWBIT_BACKEND_PORT", port)
 
     with pytest.raises(ValueError):
         production_server.production_config_from_environment()
 
+
+# ============================================================
+# PRODUCTION LAUNCHER TEST
+# ============================================================
 
 def test_production_launcher_passes_explicit_proxy_settings(
     production_settings,
@@ -295,9 +361,7 @@ def test_production_launcher_passes_explicit_proxy_settings(
     monkeypatch.setattr(
         uvicorn,
         "run",
-        lambda *args, **kwargs: calls.append(
-            (args, kwargs)
-        ),
+        lambda *args, **kwargs: calls.append((args, kwargs)),
     )
 
     production_server.main()

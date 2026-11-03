@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
 from auth import AuthSettings
@@ -20,6 +21,37 @@ class ProductionConfig:
     host: str
     port: int
     trusted_proxies: str
+
+
+def validate_mcp_state_key(
+    value: str,
+    *,
+    platform_name: str | None = None,
+) -> None:
+    """Require valid Fernet encryption on non-Windows deployments.
+
+    Windows uses the current Windows user's DPAPI protection instead.
+    platform_name is injectable to test Linux behavior on Windows.
+    """
+    active_platform = os.name if platform_name is None else platform_name
+
+    if active_platform == "nt":
+        return
+
+    key = (value or "").strip()
+
+    if not key:
+        raise ValueError(
+            "Non-Windows production requires CLAWBIT_MCP_STATE_KEY."
+        )
+
+    try:
+        Fernet(key.encode("ascii"))
+    except (UnicodeEncodeError, TypeError, ValueError):
+        raise ValueError(
+            "CLAWBIT_MCP_STATE_KEY must be a valid Fernet key "
+            "generated with Fernet.generate_key()."
+        ) from None
 
 
 def parse_trusted_proxies(value: str) -> str:
@@ -74,7 +106,10 @@ def parse_trusted_proxies(value: str) -> str:
     return ",".join(validated)
 
 
-def production_config_from_environment() -> ProductionConfig:
+def production_config_from_environment(
+    *,
+    platform_name: str | None = None,
+) -> ProductionConfig:
     """Validate production settings before opening a listening socket."""
     if os.getenv("CLAWBIT_AUTH_MODE") != "production":
         raise ValueError(
@@ -84,6 +119,12 @@ def production_config_from_environment() -> ProductionConfig:
 
     # Retain Clawbit's existing exact-origin HTTPS validation.
     AuthSettings.from_environment()
+
+    # Windows uses DPAPI; Linux and other platforms require Fernet.
+    validate_mcp_state_key(
+        os.getenv("CLAWBIT_MCP_STATE_KEY", ""),
+        platform_name=platform_name,
+    )
 
     trusted_proxies = parse_trusted_proxies(
         os.getenv("CLAWBIT_TRUSTED_PROXIES", "")
@@ -133,6 +174,7 @@ def main() -> None:
         override=False,
     )
 
+    # All production validation happens before opening the socket.
     configuration = production_config_from_environment()
 
     import uvicorn

@@ -23,6 +23,8 @@ Configure these environment variables:
 - `CLAWBIT_ALLOWED_ORIGINS` — the exact HTTPS frontend origin
 - `CLAWBIT_TRUSTED_PROXIES` — the IP addresses or CIDR networks
   of the reverse proxies that connect directly to Uvicorn
+- `CLAWBIT_MCP_STATE_KEY` — a valid Fernet key on non-Windows
+  deployments; Windows uses DPAPI instead
 
 Optional configuration:
 
@@ -37,6 +39,43 @@ To start the backend from its directory:
 
 This enables Uvicorn's proxy-header handling with an explicit
 allowlist. Local development remains unchanged.
+
+## MCP credential encryption key
+
+On Linux and other non-Windows deployments, Clawbit encrypts
+persisted MCP connector credentials using Fernet.
+
+Generate a key using the Python environment where Clawbit is
+installed:
+
+```bash
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode('ascii'))"
+```
+
+Set the generated value as `CLAWBIT_MCP_STATE_KEY` in the
+deployment secret manager or a private environment file.
+
+Important:
+
+- Never commit the key to Git.
+- Never put it in frontend environment variables.
+- Never print it in logs or share it in support messages.
+- Back it up securely.
+- Preserve the same key across restarts and deployments.
+
+**Losing or replacing this key makes previously encrypted
+connector credentials unreadable.** The affected connectors
+will need to be reconnected.
+
+The production launcher validates that the key exists and is
+a valid Fernet key before opening the backend listening socket.
+
+Windows deployments use the current Windows user's DPAPI
+protection and do not require `CLAWBIT_MCP_STATE_KEY`.
+
+Key rotation is not currently configured. Do not replace an
+existing production key until a deliberate credential migration
+or rotation procedure is implemented and tested.
 
 ## Example: nginx on the same computer
 
