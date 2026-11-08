@@ -82,7 +82,38 @@ Do not treat Vercel Function `/tmp` as durable storage. It is scratch space only
 7. Deploy Preview, run automated tests, and verify login, chat SSE, upload, retrieval, delete, OAuth and MCP flows.
 8. Migrate data only with explicit approval and a tested rollback/restore path.
 
-## 7. Open decisions before the first live Preview
+## 7. Vercel Hobby constraints and data-handling gate
+
+The first deployment target is Vercel Hobby (Free). Use it only for personal/non-commercial use, consistent with Vercel's current Hobby terms. Before making the hosted application available for third-party commercial use, reassess the plan and terms.
+
+Current design constraints to validate in Preview:
+
+- Hobby Functions using Fluid Compute have a maximum duration of 300 seconds. Vercel's general proxied-request timeout is 120 seconds. Since the frontend is planned to call the backend through a same-origin rewrite, keep proxied user-facing requests within the documented proxy limit and test SSE behavior end-to-end; move genuinely long work to a durable job/worker pattern with status polling.
+- Hobby Functions use the standard 2 GB memory / 1 vCPU allocation. Hobby users cannot configure a larger allocation.
+- Python function bundles have a 500 MB uncompressed size limit. Measure the actual deployed bundle and exclude tests, local databases, Chroma data, uploads, caches and other non-runtime files. Keep runtime dependencies minimal.
+- Hobby includes finite monthly usage: current included amounts include 4 active CPU-hours, 360 GB-hours provisioned memory, 1 million function invocations and 100 GB-hours function duration. Monitor usage rather than designing around unlimited free compute.
+- Vercel Blob's Hobby allowance is limited (currently 1 GB storage/month and 10 GB transfer/month). Confirm current limits before moving the user's existing upload library there; compare other managed object-storage options if the data volume exceeds this.
+- Verify the selected Postgres provider's free-tier limits, backup/restore options, region and connection pooling separately. The database is a separate service and is not included in the Vercel Hobby plan.
+
+**Privacy and AI-training clarification:** Vercel's March 2026 terms update describes optional AI-model training based on code, Vercel Agent chats, build/deployment telemetry and aggregate traffic statistics. The update says Hobby (including Trial Pro) is opted in by default, with a self-serve opt-out in Team and Project Settings; it also says personal information, account details, environment variables, API keys and other sensitive content are anonymized/redacted before use or sharing. This source does **not** establish that ordinary application users' Clawbit chat messages or uploaded documents are automatically used for AI training. Do not overstate that claim. Before connecting the repository, review Team/Project Data Preferences and opt out of code/Agent-chat training if desired. Separately review the privacy, retention and training settings of every model API, database, object-storage and logging provider that will process Clawbit user data.
+
+Until the Preview architecture and provider privacy settings are reviewed:
+1. Keep all original local data and backups untouched.
+2. Use synthetic/anonymized fixtures for deployment and migration tests.
+3. Do not put real connector tokens, private documents or chat history in Preview.
+4. Keep real-data migration as a separate, explicit user-approved step after provider selection and privacy review.
+
+References:
+- Vercel Hobby plan: https://vercel.com/docs/plans/hobby
+- Vercel general limits: https://vercel.com/docs/limits
+- Vercel Function limits: https://vercel.com/docs/functions/limitations
+- Vercel Python runtime and bundle: https://vercel.com/docs/functions/runtimes/python
+- Vercel Function memory: https://vercel.com/docs/functions/configuring-functions/memory
+- Vercel Blob pricing/usage: https://vercel.com/docs/vercel-blob/usage-and-pricing
+- Vercel Terms of Service: https://vercel.com/legal/terms
+- Vercel March 2026 terms update: https://vercel-docs.vercel.sh/changelog/updates-to-terms-of-service-march-2026
+
+## 8. Open decisions before the first live Preview
 
 - Vercel plan (Hobby, Pro or Enterprise), which sets the available function execution budget.
 - Whether to use a stable custom domain, or the stable Vercel production hostname.
