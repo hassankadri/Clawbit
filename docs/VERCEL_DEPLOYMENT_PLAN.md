@@ -86,7 +86,7 @@ Do not treat Vercel Function `/tmp` as durable storage. It is scratch space only
 
 - Vercel plan (Hobby, Pro or Enterprise), which sets the available function execution budget.
 - Whether to use a stable custom domain, or the stable Vercel production hostname.
-- Whether the hosted installation starts fresh, or whether the existing local account/history/uploads must be migrated.
+- Existing local installation migration is required; a fresh hosted account is not acceptable.
 - Which OAuth/MCP integrations must be available in the first hosted release.
 
 ## References
