@@ -3019,7 +3019,9 @@ export default function AppShell({
           "projects" &&
         !showProjectWorkspace &&
         !showCenteredHomeComposer ? (
-          composerElement
+          <div className="clawbit-bottom-composer">
+            {composerElement}
+          </div>
         ) : null}
       </div>
 
