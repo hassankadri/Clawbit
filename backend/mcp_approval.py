@@ -1,4 +1,3 @@
-
 """One-time, owner-scoped confirmation for MCP actions.
 
 Approvals are deliberately process-local. Clawbit currently runs
@@ -8,7 +7,6 @@ restart, cancellation, expiry or denial cannot grant approval.
 
 import asyncio
 import json
-import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -31,15 +29,6 @@ SENSITIVE_KEYS = (
     "apikey",
     "private_key",
 )
-
-WRITE_VERBS = frozenset({
-    "add", "archive", "cancel", "change", "close",
-    "commit", "create", "delete", "edit", "execute",
-    "invite", "merge", "modify", "move", "post",
-    "publish", "react", "refund", "remove", "rename",
-    "reply", "send", "set", "submit", "transfer",
-    "update", "upload", "write",
-})
 
 
 class ApprovalRejected(Exception):
@@ -66,34 +55,12 @@ def needs_approval(
     name: str,
     metadata: dict[str, Any] | None,
 ) -> bool:
-    """Treat missing read-only annotations as requiring approval.
+    """Require owner confirmation for every MCP connector operation.
 
-    A write-like tool name also requires approval even if the
-    provider incorrectly marks it read-only.
+    A read-only tool can still expose private connector data to the model.
+    Provider-supplied readOnlyHint metadata is descriptive, not user consent.
     """
-    words = re.findall(
-        r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+",
-        name.replace("-", "_"),
-    )
-    parts = {
-        word.lower()
-        for segment in name.split("_")
-        for word in (
-            re.findall(
-                r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+",
-                segment,
-            ) or [segment]
-        )
-    }
-    parts.update(word.lower() for word in words)
-
-    if parts & WRITE_VERBS:
-        return True
-
-    return not (
-        isinstance(metadata, dict)
-        and metadata.get("readOnlyHint") is True
-    )
+    return True
 
 
 def _masked(value: Any) -> Any:
@@ -106,8 +73,10 @@ def _masked(value: Any) -> Any:
             )
             for key, item in value.items()
         }
+
     if isinstance(value, list):
         return [_masked(item) for item in value]
+
     return value
 
 
@@ -128,10 +97,12 @@ async def require_mcp_approval(
             sort_keys=True,
             allow_nan=False,
         )
+
         if len(serialized.encode("utf-8")) > MAX_ARGUMENT_BYTES:
             raise ApprovalRejected(
                 "MCP action arguments exceed the approval display limit."
             )
+
         preview = json.dumps(
             _masked(arguments),
             ensure_ascii=False,
@@ -139,6 +110,7 @@ async def require_mcp_approval(
             sort_keys=True,
             allow_nan=False,
         )
+
     except (TypeError, ValueError, OverflowError) as exc:
         raise ApprovalRejected(
             "MCP action arguments cannot be reviewed safely."
@@ -150,6 +122,7 @@ async def require_mcp_approval(
         )
 
     now = time.monotonic()
+
     approval = PendingApproval(
         id=uuid.uuid4().hex,
         owner=owner,
@@ -159,11 +132,16 @@ async def require_mcp_approval(
         created_at=now,
         expires_at=now + timeout,
     )
+
     _pending[approval.id] = approval
 
     try:
         try:
-            await asyncio.wait_for(approval.event.wait(), timeout=timeout)
+            await asyncio.wait_for(
+                approval.event.wait(),
+                timeout=timeout,
+            )
+
         except asyncio.TimeoutError:
             raise ApprovalRejected(
                 "MCP action approval expired. No external action was performed."
@@ -175,6 +153,7 @@ async def require_mcp_approval(
             raise ApprovalRejected(
                 "MCP action was denied. No external action was performed."
             )
+
     finally:
         _pending.pop(approval.id, None)
 
@@ -218,10 +197,13 @@ def decide_approval(
 
     item.decision = approve
     item.event.set()
+
     return True
 
 
-def cancel_pending_approvals(provider: str | None = None) -> None:
+def cancel_pending_approvals(
+    provider: str | None = None,
+) -> None:
     """Revoke pending actions during connector changes or logout."""
     owner = current_owner()
 

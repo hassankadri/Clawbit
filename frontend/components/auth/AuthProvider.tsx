@@ -9,6 +9,7 @@ import {
   getServerAuthState,
   restoreSession,
   signIn,
+  signUp,
   subscribeAuth,
 } from "@/lib/auth";
 
@@ -43,6 +44,7 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       </main>
     );
   }
+
   if (session.status === "unavailable") {
     return (
       <main className="grid min-h-dvh place-items-center p-6">
@@ -58,10 +60,24 @@ export default function AuthProvider({ children }: { children: ReactNode }) {
       </main>
     );
   }
-  if (session.status === "anonymous") return <LoginForm onSignIn={signIn} />;
+
+  if (session.status === "anonymous") {
+    return (
+      <LoginForm
+        setupRequired={session.setupRequired}
+        onSignIn={signIn}
+        onSignUp={signUp}
+      />
+    );
+  }
+
   if (!session.user) return null;
+
   return (
-    <BrowserOwnerGate key={session.user.principal_id} principalId={session.user.principal_id}>
+    <BrowserOwnerGate
+      key={session.user.principal_id}
+      principalId={session.user.principal_id}
+    >
       {children}
     </BrowserOwnerGate>
   );

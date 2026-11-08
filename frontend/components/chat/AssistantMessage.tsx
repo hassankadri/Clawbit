@@ -412,10 +412,9 @@ export default function AssistantMessage({
                 {research.retrieved_sources} retrieved sources; {research.cited_sources} cited. {research.limitations.join(" ")}
               </p>}
               <Markdown
-                sources={sources}
-                content={
-                  content
-                }
+              sources={sources}
+              content={content}
+              isStreaming={status === "streaming"}
               />
               {status === "cancelled" && (
                 <p className="mt-2 text-xs text-zinc-500">Generation stopped.</p>

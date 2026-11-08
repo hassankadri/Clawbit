@@ -1,9 +1,11 @@
+
 from email.message import Message
 import gzip
 import io
 import socket
 import ssl
 import zlib
+from types import SimpleNamespace
 
 import pytest
 
@@ -22,6 +24,23 @@ def answer(address):
 @pytest.fixture(autouse=True)
 def offline_dns(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: [answer(PUBLIC)])
+
+
+def read_public_webpage():
+    """Invoke the webpage tool with an authorized test runtime."""
+    runtime = SimpleNamespace(
+        config={
+            "configurable": {
+                "user_query": "Please read https://public.example"
+            }
+        },
+        state={"messages": []},
+    )
+
+    return read_webpage.func(
+        "https://public.example",
+        runtime,
+    )
 
 
 class Response:
@@ -107,7 +126,13 @@ def test_malformed_urls_rejected(url, transport):
     assert transport[1] == []
 
 
-@pytest.mark.parametrize("addresses", [["10.0.0.1"], [PUBLIC, "10.0.0.1"], ["::1", PUBLIC], [PUBLIC, "169.254.169.254"], []])
+@pytest.mark.parametrize("addresses", [
+    ["10.0.0.1"],
+    [PUBLIC, "10.0.0.1"],
+    ["::1", PUBLIC],
+    [PUBLIC, "169.254.169.254"],
+    [],
+])
 def test_all_dns_answers_must_be_public(monkeypatch, transport, addresses):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [answer(ip) for ip in addresses])
     with pytest.raises(web.WebFetchError):
@@ -120,70 +145,116 @@ def test_alternate_ip_encodings_cannot_bypass_dns_policy(monkeypatch, transport,
     def resolve(name, *args, **kwargs):
         assert name == host
         return [answer("127.0.0.1")]
+
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
     with pytest.raises(web.WebFetchError):
         web.fetch_webpage("http://" + host)
     assert transport[1] == []
 
 
-@pytest.mark.parametrize("location", ["http://127.0.0.1/private", "http://169.254.169.254/latest/meta-data", "http://[::1]", "file:///private", "https://name:secret@example.org"])
+@pytest.mark.parametrize("location", [
+    "http://127.0.0.1/private",
+    "http://169.254.169.254/latest/meta-data",
+    "http://[::1]",
+    "file:///private",
+    "https://name:secret@example.org",
+])
 def test_redirect_destinations_revalidated(transport, location):
     redirect = Response(status=302, headers={"Location": location})
     transport[0].append(redirect)
+
     with pytest.raises(web.WebFetchError):
         web.fetch_webpage("https://public.example")
+
     assert len(transport[1]) == 1 and redirect.closed
     assert all(connection.closed for connection in transport[2])
 
 
 def test_redirect_to_hostname_with_private_dns(monkeypatch, transport):
-    monkeypatch.setattr(socket, "getaddrinfo", lambda host, *a, **k: [answer(PUBLIC if host == "public.example" else "10.0.0.1")])
-    transport[0].append(Response(status=302, headers={"Location": "https://rebound.example"}))
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda host, *a, **k: [answer(PUBLIC if host == "public.example" else "10.0.0.1")],
+    )
+    transport[0].append(
+        Response(status=302, headers={"Location": "https://rebound.example"})
+    )
+
     with pytest.raises(web.WebFetchError):
         web.fetch_webpage("https://public.example")
+
     assert len(transport[1]) == 1
 
 
 def test_redirect_loop_stops(transport):
     transport[0].append(Response(status=302, headers={"Location": "/"}))
+
     with pytest.raises(web.WebFetchError, match="loop"):
         web.fetch_webpage("https://public.example")
+
     assert len(transport[1]) == 1
 
 
 @pytest.mark.parametrize("count,success", [(3, True), (4, False)])
 def test_redirect_count_limit(transport, count, success):
-    transport[0].extend(Response(status=302, headers={"Location": f"/{index}"}) for index in range(count))
+    transport[0].extend(
+        Response(status=302, headers={"Location": f"/{index}"})
+        for index in range(count)
+    )
     transport[0].append(Response())
+
     if success:
         assert "Readable page" in web.fetch_webpage("https://public.example/start")
     else:
         with pytest.raises(web.WebFetchError, match="redirects"):
             web.fetch_webpage("https://public.example/start")
+
     assert len(transport[1]) == 4
 
 
 @pytest.mark.parametrize("content_type,body,expected", [
-    ("text/html; charset=utf-8", b'<html><head><style>hidden CSS</style></head><body><h1>Heading</h1><p>Price &amp; value: <b>42</b>.</p><script>stealSecrets()</script><nav>menu</nav><!--comment--></body></html>', "Heading\nPrice & value:"),
-    ("text/plain", b"Line one\n  indentation & punctuation < >", "Line one\n  indentation & punctuation < >"),
-    ("text/plain; charset=iso-8859-1", b"caf\xe9", "café"),
+    (
+        "text/html; charset=utf-8",
+        b'<html><head><style>hidden CSS</style></head><body><h1>Heading</h1><p>Price &amp; value: <b>42</b>.</p><script>stealSecrets()</script><nav>menu</nav><!--comment--></body></html>',
+        "Heading\nPrice & value:",
+    ),
+    (
+        "text/plain",
+        b"Line one\n  indentation & punctuation < >",
+        "Line one\n  indentation & punctuation < >",
+    ),
+    (
+        "text/plain; charset=iso-8859-1",
+        b"caf\xe9",
+        "café",
+    ),
 ])
 def test_readable_html_and_text(transport, content_type, body, expected):
     response = Response(body, headers={"Content-Type": content_type})
     transport[0].append(response)
+
     result = web.fetch_webpage("https://public.example/article")
+
     assert expected in result
     assert "Source: https://public.example/article" in result
     assert "stealSecrets" not in result and "hidden CSS" not in result and "menu" not in result
     assert response.closed and transport[2][0].closed
 
 
-@pytest.mark.parametrize("content_type", ["application/json", "application/pdf", "image/png", "application/octet-stream", ""])
+@pytest.mark.parametrize("content_type", [
+    "application/json",
+    "application/pdf",
+    "image/png",
+    "application/octet-stream",
+    "",
+])
 def test_nontext_rejected_before_read(transport, content_type):
     response = Response(headers={"Content-Type": content_type})
     transport[0].append(response)
+
     with pytest.raises(web.WebFetchError):
         web.fetch_webpage("https://public.example")
+
     assert response.reads == [] and response.closed
 
 
@@ -192,40 +263,77 @@ def test_wire_limit(transport, declared):
     headers = {"Content-Type": "text/plain"}
     if declared:
         headers["Content-Length"] = str(web.MAX_BYTES + 1)
+
     response = Response(b"x" * (web.MAX_BYTES + 1), headers=headers)
     transport[0].append(response)
+
     with pytest.raises(web.WebFetchError, match="1 MiB"):
         web.fetch_webpage("https://public.example")
+
     assert response.closed and transport[2][0].closed
     assert response.body.tell() <= web.MAX_BYTES + 1
 
 
-@pytest.mark.parametrize("encoding,compress", [("gzip", gzip.compress), ("deflate", zlib.compress)])
-@pytest.mark.parametrize("size,allowed", [(30, True), (web.MAX_BYTES, True), (web.MAX_BYTES + 1, False)])
+@pytest.mark.parametrize(
+    "encoding,compress",
+    [("gzip", gzip.compress), ("deflate", zlib.compress)],
+)
+@pytest.mark.parametrize(
+    "size,allowed",
+    [(30, True), (web.MAX_BYTES, True), (web.MAX_BYTES + 1, False)],
+)
 def test_compressed_content_is_bounded(transport, encoding, compress, size, allowed):
     data = compress(b"x" * size)
-    response = Response(data, headers={"Content-Type": "text/plain", "Content-Encoding": encoding, "Content-Length": str(len(data))})
+    response = Response(
+        data,
+        headers={
+            "Content-Type": "text/plain",
+            "Content-Encoding": encoding,
+            "Content-Length": str(len(data)),
+        },
+    )
     transport[0].append(response)
+
     if allowed:
         assert "x" * min(size, 5000) in web.fetch_webpage("https://public.example")
     else:
         with pytest.raises(web.WebFetchError, match="1 MiB"):
             web.fetch_webpage("https://public.example")
+
     assert response.closed
 
 
-@pytest.mark.parametrize("encoding,data", [("gzip", b"bad gzip"), ("gzip", gzip.compress(b"hello")[:-3]),
-                                         ("gzip", gzip.compress(b"a") + gzip.compress(b"b")), ("br", b"unsupported")])
+@pytest.mark.parametrize("encoding,data", [
+    ("gzip", b"bad gzip"),
+    ("gzip", gzip.compress(b"hello")[:-3]),
+    ("gzip", gzip.compress(b"a") + gzip.compress(b"b")),
+    ("br", b"unsupported"),
+])
 def test_malformed_or_unsupported_compression_fails_closed(transport, encoding, data):
-    transport[0].append(Response(data, headers={"Content-Type": "text/plain", "Content-Encoding": encoding}))
+    transport[0].append(
+        Response(
+            data,
+            headers={
+                "Content-Type": "text/plain",
+                "Content-Encoding": encoding,
+            },
+        )
+    )
+
     with pytest.raises(web.WebFetchError):
         web.fetch_webpage("https://public.example")
 
 
-@pytest.mark.parametrize("failure", [TimeoutError("internal.private secret-token"), OSError("10.1.1.1 Authorization: secret-token"), ssl.SSLCertVerificationError("private cert")])
+@pytest.mark.parametrize("failure", [
+    TimeoutError("internal.private secret-token"),
+    OSError("10.1.1.1 Authorization: secret-token"),
+    ssl.SSLCertVerificationError("private cert"),
+])
 def test_network_failures_return_safe_errors(transport, failure):
     transport[0].append(failure)
-    result = read_webpage.invoke({"url": "https://public.example"})
+
+    result = read_public_webpage()
+
     assert result.startswith("Could not read webpage:")
     assert "secret-token" not in result and "10.1.1.1" not in result and "private" not in result
     assert transport[2][0].closed
@@ -234,11 +342,17 @@ def test_network_failures_return_safe_errors(transport, failure):
 @pytest.mark.parametrize("tls", [False, True])
 def test_pinned_socket_prevents_rebinding_and_ignores_proxies(monkeypatch, tls):
     dns, sockets, tls_names = [], [], []
+
     def resolve(host, *args, **kwargs):
         dns.append(host)
         return [answer(PUBLIC if len(dns) == 1 else "127.0.0.1")]
+
     monkeypatch.setattr(socket, "getaddrinfo", resolve)
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
+
+    for name in (
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    ):
         monkeypatch.setenv(name, "http://127.0.0.1:8888")
 
     class Socket:
@@ -247,26 +361,39 @@ def test_pinned_socket_prevents_rebinding_and_ignores_proxies(monkeypatch, tls):
             self.timeouts, self.sent = [], b""
             self.closed = False
             sockets.append(self)
+
         def settimeout(self, value):
             self.timeouts.append(value)
+
         def connect(self, endpoint):
             self.endpoint = endpoint
+
         def sendall(self, value):
             self.sent += value
+
         def makefile(self, *args):
-            return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 5\r\n\r\nhello")
+            return io.BytesIO(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/plain\r\n"
+                b"Content-Length: 5\r\n\r\n"
+                b"hello"
+            )
+
         def close(self):
             self.closed = True
 
     context = ssl.create_default_context()
     assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+
     def wrap(sock, server_hostname):
         assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
         tls_names.append(server_hostname)
         return sock
+
     monkeypatch.setattr(context, "wrap_socket", wrap)
     monkeypatch.setattr(ssl, "create_default_context", lambda: context)
     monkeypatch.setattr(socket, "socket", Socket)
+
     scheme = "https" if tls else "http"
     assert "hello" in web.fetch_webpage(f"{scheme}://public.example/path?q=value")
     assert dns == ["public.example"]
@@ -283,43 +410,63 @@ def test_ipv6_connection_uses_validated_numeric_sockaddr(monkeypatch):
     address = "2606:4700:4700::1111"
     target = web.validate_target(f"http://[{address}]:8080/path")
     connected = []
+
     class Socket:
         def __init__(self, family, *args):
             assert family == socket.AF_INET6
+
         def settimeout(self, value):
             pass
+
         def connect(self, endpoint):
             connected.append(endpoint)
+
         def close(self):
             pass
+
     monkeypatch.setattr(socket, "socket", Socket)
-    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: pytest.fail("Second DNS lookup"))
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *a, **k: pytest.fail("Second DNS lookup"),
+    )
+
     connection = web._PinnedConnection(target)
     connection.connect()
     connection.close()
+
     assert connected == [(address, 8080, 0, 0)]
 
 
 def test_tls_certificate_failure_closes_socket_without_retry(monkeypatch):
     closed, connected = [], []
+
     class Socket:
         def __init__(self, *args):
             pass
+
         def settimeout(self, value):
             pass
+
         def connect(self, endpoint):
             connected.append(endpoint)
+
         def close(self):
             closed.append(True)
+
     context = ssl.create_default_context()
+
     def reject(sock, server_hostname):
         assert server_hostname == "public.example"
         assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
         raise ssl.SSLCertVerificationError("certificate for internal-host secret")
+
     monkeypatch.setattr(context, "wrap_socket", reject)
     monkeypatch.setattr(ssl, "create_default_context", lambda: context)
     monkeypatch.setattr(socket, "socket", Socket)
-    result = read_webpage.invoke({"url": "https://public.example"})
+
+    result = read_public_webpage()
+
     assert "could not be read securely" in result
     assert "internal-host" not in result and "secret" not in result
     assert connected == [(PUBLIC, 443)] and closed == [True]
@@ -330,18 +477,24 @@ def test_body_deadline_closes_resources(monkeypatch, transport):
     transport[0].append(response)
     times = iter([0, web.BODY_TIMEOUT + 1])
     monkeypatch.setattr(web.time, "monotonic", lambda: next(times))
+
     with pytest.raises(web.WebFetchError, match="too long"):
         web.fetch_webpage("https://public.example")
+
     assert response.closed and transport[2][0].closed
 
 
 def test_partial_body_read_error_closes_resources(transport, monkeypatch):
     response = Response(b"hello")
     transport[0].append(response)
+
     def fail(size):
         raise OSError("private upstream address and token")
+
     monkeypatch.setattr(response, "read1", fail)
-    result = read_webpage.invoke({"url": "https://public.example"})
+
+    result = read_public_webpage()
+
     assert "could not be read securely" in result
     assert "private" not in result and "token" not in result
     assert response.closed and transport[2][0].closed
@@ -354,15 +507,29 @@ def test_partial_body_read_error_closes_resources(transport, monkeypatch):
     ({"Transfer-Encoding": "chunked", "Content-Length": "0"}, b""),
 ])
 def test_ambiguous_or_truncated_responses_are_rejected(transport, headers, body):
-    transport[0].append(Response(body, headers={"Content-Type": "text/plain", **headers}))
+    transport[0].append(
+        Response(
+            body,
+            headers={"Content-Type": "text/plain", **headers},
+        )
+    )
+
     with pytest.raises(web.WebFetchError):
         web.fetch_webpage("https://public.example")
 
 
 def test_redirect_revalidates_even_the_same_hostname(monkeypatch, transport):
     resolutions = iter([PUBLIC, "127.0.0.1"])
-    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **k: [answer(next(resolutions))])
-    transport[0].append(Response(status=302, headers={"Location": "/second"}))
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *a, **k: [answer(next(resolutions))],
+    )
+    transport[0].append(
+        Response(status=302, headers={"Location": "/second"})
+    )
+
     with pytest.raises(web.WebFetchError):
         web.fetch_webpage("https://public.example/first")
+
     assert len(transport[1]) == 1

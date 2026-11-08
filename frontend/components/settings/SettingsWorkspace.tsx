@@ -5,8 +5,7 @@ import { useTheme } from "next-themes";
 
 import {
   Check,
-  CircleHelp,
-  Clipboard,
+  Brain,
   Database,
   Download,
   HardDrive,
@@ -29,7 +28,6 @@ import {
 
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -60,6 +58,7 @@ import {
 } from "@/lib/personalization";
 
 import { cn } from "@/lib/utils";
+import MemoryPanel from "@/components/settings/MemoryPanel";
 
 type Section =
   | "general"
@@ -67,9 +66,9 @@ type Section =
   | "personalization"
   | "profile"
   | "privacy"
+  | "memory"
   | "data"
-  | "reset"
-  | "help";
+  | "reset";
 
 type ThemeMode = "system" | "light" | "dark";
 
@@ -124,6 +123,12 @@ const navigation: {
     group: "Settings",
   },
   {
+    id: "memory",
+    title: "Memory",
+    icon: Brain,
+    group: "Settings",
+  },
+  {
     id: "personalization",
     title: "Personalization",
     icon: SlidersHorizontal,
@@ -152,119 +157,6 @@ const navigation: {
     title: "Reset",
     icon: RotateCcw,
     group: "Workspace",
-  },
-  {
-    id: "help",
-    title: "Help & Docs",
-    icon: CircleHelp,
-    group: "Workspace",
-  },
-];
-
-type HelpArticle = {
-  id: string;
-  category: string;
-  title: string;
-  summary: string;
-  body: string[];
-  steps?: string[];
-};
-
-const helpArticles: HelpArticle[] = [
-  {
-    id: "getting-started",
-    category: "Getting started",
-    title: "Start using Clawbit",
-    summary:
-      "Create chats, choose a model, upload files, and keep your work organized.",
-    body: [
-      "Use New chat for a normal conversation and Projects when you want related chats and files grouped together.",
-      "Choose a model from the composer. Research mode can be used when you need deeper web research and source checking.",
-      "You can attach supported documents and images directly from the composer.",
-    ],
-    steps: [
-      "Open New chat or choose a project.",
-      "Choose the model you want to use.",
-      "Attach files when the answer should use your documents.",
-      "Send the message and continue in the same thread.",
-    ],
-  },
-  {
-    id: "projects",
-    category: "Projects",
-    title: "Projects and project history",
-    summary: "Keep related conversations and files together.",
-    body: [
-      "A project keeps its own conversation history and uploaded file information.",
-      "Opening an existing project can restore its most recent conversation.",
-      "Use project history when you want to return to an older conversation inside that project.",
-    ],
-  },
-  {
-    id: "research",
-    category: "Research",
-    title: "Research mode",
-    summary:
-      "Use deeper web research when a question needs current or verified information.",
-    body: [
-      "Switch to Research mode from the chat mode controls.",
-      "Research mode is intended for questions that benefit from multiple searches or source checking.",
-      "You can return to Normal mode whenever deeper research is not needed.",
-    ],
-  },
-  {
-    id: "mcp",
-    category: "Tools & MCP",
-    title: "Connect external tools",
-    summary:
-      "Connect supported services such as GitHub, Notion, Stripe, Google Drive, and Slack.",
-    body: [
-      "Open Tools to manage MCP connectors.",
-      "Token-based connectors ask for credentials in the connector dialog. Google Drive and Slack use OAuth.",
-      "Connected MCP tools can then be made available to Clawbit when they are relevant to a conversation.",
-    ],
-  },
-  {
-    id: "files",
-    category: "Files",
-    title: "Upload and use files",
-    summary:
-      "Attach documents and images so Clawbit can work with them.",
-    body: [
-      "Use the + button in the composer to select files.",
-      "Wait for an upload to finish before sending when you want the answer to use that file.",
-      "Files uploaded inside Projects can also appear in the project's Files section.",
-    ],
-  },
-  {
-    id: "troubleshooting",
-    category: "Troubleshooting",
-    title: "Fix common local-development issues",
-    summary:
-      "Check the frontend, backend, OAuth setup, and browser state.",
-    body: [
-      "If the UI looks stale, restart the frontend development server and hard refresh the browser.",
-      "If chat or uploads fail, confirm the FastAPI backend is running and inspect the first backend error.",
-      "OAuth connectors require their configured callback URL to remain valid during local testing.",
-    ],
-    steps: [
-      "Check the browser console for the first frontend error.",
-      "Check the backend terminal for the first request error.",
-      "Verify environment variables are loaded without printing secret values.",
-      "Retry the exact action that failed.",
-    ],
-  },
-  {
-    id: "shortcuts",
-    category: "Keyboard",
-    title: "Keyboard shortcuts",
-    summary: "Move around Clawbit faster.",
-    body: [
-      "Ctrl/Cmd + K opens the command palette.",
-      "Enter sends a message from the composer.",
-      "Shift + Enter inserts a new line.",
-      "Escape closes most menus and dialogs.",
-    ],
   },
 ];
 
@@ -315,9 +207,15 @@ function formatBytes(bytes: number) {
 export default function SettingsWorkspace({
   onExitSettings,
   initialSection = "general",
+  workspaceId,
+  onImportBrowserHistory,
+  importingBrowserHistory = false,
 }: {
   onExitSettings: () => void;
   initialSection?: Section;
+  workspaceId?: string;
+  onImportBrowserHistory?: () => void;
+  importingBrowserHistory?: boolean;
 }) {
   const availableModels = useModels();
   const { setTheme } = useTheme();
@@ -352,11 +250,6 @@ export default function SettingsWorkspace({
     useState("Calculating...");
 
   const [status, setStatus] = useState("");
-
-  const [helpSearch, setHelpSearch] = useState("");
-
-  const [helpSelectedId, setHelpSelectedId] =
-    useState(helpArticles[0].id);
 
   const importInputRef = useRef<HTMLInputElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -733,62 +626,11 @@ export default function SettingsWorkspace({
   /* HELP DIAGNOSTICS                                     */
   /* ==================================================== */
 
-  async function copyDiagnostics() {
-    const lines = [
-      "Clawbit diagnostics",
-      `URL: ${window.location.href}`,
-      `Browser: ${navigator.userAgent}`,
-      `Time: ${new Date().toISOString()}`,
-
-      `Theme: ${
-        document.documentElement.classList.contains("dark")
-          ? "dark"
-          : "light"
-      }`,
-
-      `Chat mode: ${getActiveChatMode()}`,
-    ];
-
-    try {
-      await navigator.clipboard.writeText(
-        lines.join("\n"),
-      );
-
-      setStatus("Diagnostics copied.");
-    } catch {
-      setStatus("Clipboard access was blocked.");
-    }
-  }
-
   const visibleNav = navigation.filter((entry) =>
     entry.title
       .toLowerCase()
       .includes(search.trim().toLowerCase()),
   );
-
-  const filteredArticles = useMemo(() => {
-    const query = helpSearch.trim().toLowerCase();
-
-    return helpArticles.filter((article) =>
-      [
-        article.category,
-        article.title,
-        article.summary,
-        ...article.body,
-        ...(article.steps ?? []),
-      ]
-        .join(" ")
-        .toLowerCase()
-        .includes(query),
-    );
-  }, [helpSearch]);
-
-  const activeArticle =
-    filteredArticles.find(
-      (article) => article.id === helpSelectedId,
-    ) ??
-    filteredArticles[0] ??
-    null;
 
   /* ==================================================== */
   /* UNIFIED MODAL                                        */
@@ -816,7 +658,7 @@ export default function SettingsWorkspace({
             id="clawbit-modal-description"
             className="sr-only"
           >
-            Manage settings, personalization, profile and help.
+            Manage settings, personalization, profile, data and memory.
           </Dialog.Description>
 
           <input
@@ -1225,6 +1067,28 @@ export default function SettingsWorkspace({
                 </div>
               )}
 
+              {/* MEMORY */}
+
+              {activeSection === "memory" && (
+                <div className="space-y-5">
+                  <Heading
+                    title="Memory"
+                    description="Save useful facts and preferences that Clawbit can reuse in future conversations."
+                  />
+                  <p className="text-xs leading-6 text-[color:var(--muted-foreground)]">
+                    Workspace memory stays in the current workspace. Personal memory can inform your other conversations.
+                    Only save information you want reused. Never save passwords, API keys or other credentials.
+                  </p>
+                  {workspaceId ? (
+                    <MemoryPanel key={workspaceId} workspaceId={workspaceId} />
+                  ) : (
+                    <p className="rounded-lg border border-[color:var(--border)] p-3 text-xs text-[color:var(--muted-foreground)]">
+                      Workspace memory is unavailable until a workspace is selected.
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* PROFILE */}
 
               {activeSection === "profile" && (
@@ -1383,6 +1247,25 @@ export default function SettingsWorkspace({
                     </Action>
                   </div>
 
+                  {onImportBrowserHistory && (
+                    <div className="border-b border-[color:var(--border)] pb-6">
+                      <Heading
+                        title="Import browser history"
+                        description="Bring older browser-saved conversations into your signed-in Clawbit account."
+                      />
+                      <Action
+                        icon={Import}
+                        disabled={importingBrowserHistory}
+                        onClick={onImportBrowserHistory}
+                      >
+                        {importingBrowserHistory ? "Importing…" : "Import browser history"}
+                      </Action>
+                      <p className="mt-3 text-xs leading-5 text-[color:var(--muted-foreground)]">
+                        Existing server conversations are not overwritten. Your original browser data is retained.
+                      </p>
+                    </div>
+                  )}
+
                   <div>
                     <Heading
                       title="Local data"
@@ -1474,130 +1357,6 @@ export default function SettingsWorkspace({
                       <Trash2 size={15} />
                       Clear all local data
                     </button>
-                  </div>
-                </div>
-              )}
-
-              {/* HELP & DOCS */}
-
-              {activeSection === "help" && (
-                <div>
-                  <Heading
-                    title="Help & Docs"
-                    description="Guides for chats, Projects, Research, files, MCP, and shortcuts."
-                  />
-
-                  <div className="relative mb-5">
-                    <Search
-                      size={15}
-                      className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted-foreground)]"
-                    />
-
-                    <input
-                      value={helpSearch}
-                      onChange={(event) =>
-                        setHelpSearch(event.target.value)
-                      }
-                      placeholder="Search Help & Docs"
-                      aria-label="Search Help & Docs"
-                      className="h-10 w-full rounded-lg border border-[color:var(--border)] bg-[color:var(--surface)] pl-10 pr-3 text-xs outline-none"
-                    />
-                  </div>
-
-                  <div className="grid gap-3 lg:grid-cols-[190px_minmax(0,1fr)]">
-                    <nav
-                      aria-label="Help articles"
-                      className="space-y-1 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-2"
-                    >
-                      {filteredArticles.map((article) => (
-                        <button
-                          key={article.id}
-                          type="button"
-                          onClick={() =>
-                            setHelpSelectedId(article.id)
-                          }
-                          className={cn(
-                            "w-full rounded-lg px-2.5 py-2 text-left text-xs hover:bg-[color:var(--accent-hover)]",
-                            activeArticle?.id === article.id &&
-                              "bg-[color:var(--accent-hover)] font-medium",
-                          )}
-                        >
-                          <span className="mb-1 block text-[10px] text-[color:var(--muted-foreground)]">
-                            {article.category}
-                          </span>
-
-                          {article.title}
-                        </button>
-                      ))}
-
-                      {!filteredArticles.length && (
-                        <p className="px-2 py-5 text-xs text-[color:var(--muted-foreground)]">
-                          No matching articles.
-                        </p>
-                      )}
-                    </nav>
-
-                    <article className="min-h-[280px] rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
-                      {activeArticle ? (
-                        <>
-                          <p className="text-[10px] uppercase tracking-wider text-[color:var(--muted-foreground)]">
-                            {activeArticle.category}
-                          </p>
-
-                          <h3 className="mt-2 text-[15px] font-semibold">
-                            {activeArticle.title}
-                          </h3>
-
-                          <p className="mt-2 text-xs leading-5 text-[color:var(--muted-foreground)]">
-                            {activeArticle.summary}
-                          </p>
-
-                          <div className="mt-4 space-y-3">
-                            {activeArticle.body.map((body) => (
-                              <p
-                                key={body}
-                                className="text-xs leading-6"
-                              >
-                                {body}
-                              </p>
-                            ))}
-                          </div>
-
-                          {activeArticle.steps && (
-                            <ol className="mt-5 list-decimal space-y-2 border-t border-[color:var(--border)] py-4 pl-5 text-xs leading-5">
-                              {activeArticle.steps.map((step) => (
-                                <li key={step}>{step}</li>
-                              ))}
-                            </ol>
-                          )}
-                        </>
-                      ) : (
-                        <p className="text-xs text-[color:var(--muted-foreground)]">
-                          Select an article.
-                        </p>
-                      )}
-                    </article>
-                  </div>
-
-                  <div className="mt-4 flex items-center justify-between gap-3 rounded-xl border border-[color:var(--border)] bg-[color:var(--surface)] p-4">
-                    <div>
-                      <p className="text-xs font-medium">
-                        Need debugging information?
-                      </p>
-
-                      <p className="mt-1 text-[11px] text-[color:var(--muted-foreground)]">
-                        Copy non-secret browser diagnostics.
-                      </p>
-                    </div>
-
-                    <Action
-                      icon={Clipboard}
-                      onClick={() => {
-                        void copyDiagnostics();
-                      }}
-                    >
-                      Copy diagnostics
-                    </Action>
                   </div>
                 </div>
               )}

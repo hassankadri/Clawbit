@@ -47,6 +47,8 @@ interface SidebarProps {
   theme: Theme;
   activeView: RouteView;
   collapsed: boolean;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
 
   pinnedChats: SidebarConversation[];
   recentChats: SidebarConversation[];
@@ -74,6 +76,7 @@ const navigationItems = [
   { id: "projects", label: "Projects", icon: Folder },
   { id: "plugins", label: "Tools", icon: PlugZap },
   { id: "library", label: "Library", icon: BookOpen },
+  { id: "help", label: "Help & Docs", icon: CircleHelp },
 ] as const;
 
 const SIDEBAR_WIDTH_KEY = "clawbit.sidebar.width.v2";
@@ -94,6 +97,8 @@ export default function Sidebar({
   theme,
   activeView,
   collapsed,
+  mobileOpen,
+  onCloseMobile,
   pinnedChats,
   recentChats,
   projects,
@@ -123,6 +128,45 @@ export default function Sidebar({
     projects.length > 0 ||
     pinnedChats.length > 0 ||
     recentChats.length > 0;
+
+  const previousRouteRef = useRef({
+    activeView,
+    activeProjectId,
+    activeConversationId,
+  });
+
+  useEffect(() => {
+    const previous = previousRouteRef.current;
+    const routeChanged =
+      previous.activeView !== activeView ||
+      previous.activeProjectId !== activeProjectId ||
+      previous.activeConversationId !== activeConversationId;
+
+    previousRouteRef.current = {
+      activeView,
+      activeProjectId,
+      activeConversationId,
+    };
+
+    if (mobileOpen && routeChanged) onCloseMobile();
+  }, [
+    activeView,
+    activeProjectId,
+    activeConversationId,
+    mobileOpen,
+    onCloseMobile,
+  ]);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") onCloseMobile();
+    }
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [mobileOpen, onCloseMobile]);
 
   useEffect(() => {
     let frameId: number | null = null;
@@ -239,9 +283,11 @@ export default function Sidebar({
       ref={asideRef}
       initial={false}
       animate={{
-        width: collapsed
-          ? COLLAPSED_SIDEBAR_WIDTH
-          : sidebarWidth,
+        width: mobileOpen
+          ? 300
+          : collapsed
+            ? COLLAPSED_SIDEBAR_WIDTH
+            : sidebarWidth,
       }}
       transition={
         resizing
@@ -253,7 +299,8 @@ export default function Sidebar({
             }
       }
       className={cn(
-        "relative flex h-screen shrink-0 overflow-x-hidden border-r",
+        "relative hidden h-screen shrink-0 overflow-x-hidden border-r lg:flex",
+        mobileOpen && "fixed inset-y-0 left-0 z-[110] !flex m-0 h-[100dvh] w-[300px] max-w-[calc(100vw-24px)] shadow-2xl lg:relative lg:inset-auto lg:z-auto lg:h-screen lg:w-auto lg:max-w-none lg:shadow-none",
         theme === "dark"
           ? "border-white/[0.055] bg-[#090909] text-white"
           : "border-black/[0.08] bg-[#f7f7f7] text-[#171717]",
@@ -267,7 +314,7 @@ export default function Sidebar({
           title="Drag to resize • Double-click to reset"
           onPointerDown={startResizing}
           onDoubleClick={resetSidebarWidth}
-          className="group absolute -right-[4px] top-0 z-[450] h-full w-[8px] cursor-col-resize"
+          className="group absolute -right-[4px] top-0 z-[450] hidden h-full w-[8px] cursor-col-resize lg:block"
         >
           <span
             className={cn(
@@ -309,10 +356,10 @@ export default function Sidebar({
               </div>
 
               <SidebarIconButton
-                label="Close sidebar"
+                label={mobileOpen ? "Close navigation" : "Close sidebar"}
                 icon={PanelLeftClose}
                 theme={theme}
-                onClick={onToggleCollapsed}
+                onClick={mobileOpen ? onCloseMobile : onToggleCollapsed}
               />
             </>
           ) : (
@@ -1115,14 +1162,6 @@ function AccountMenu({
               label="Settings"
               active={activeView === "settings"}
               onSelect={() => onNavigate("settings")}
-            />
-
-            <AccountMenuItem
-              theme={theme}
-              icon={CircleHelp}
-              label="Help & Docs"
-              active={activeView === "help"}
-              onSelect={() => onNavigate("help")}
             />
 
             <DropdownMenu.Item

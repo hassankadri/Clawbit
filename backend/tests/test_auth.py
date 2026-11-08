@@ -171,7 +171,7 @@ def test_invalid_login_is_generic_and_never_echoes_credentials(anonymous, auth_s
 
 def test_uninitialized_installation_cannot_sign_in(anonymous):
     assert login(anonymous).status_code == 401
-    assert anonymous.post("/auth/register", json={}).status_code == 401
+    assert anonymous.post("/auth/register", json={}).status_code == 400
 
 
 def test_all_existing_sensitive_routes_reject_anonymous_requests(anonymous, monkeypatch):

@@ -1,4 +1,3 @@
-
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
@@ -299,7 +298,7 @@ export default function UserMessage({
   return (
     <>
       <div className="flex justify-end">
-        <div className="flex max-w-[min(90%,760px)] flex-row-reverse items-start gap-3">
+        <div className="flex max-w-[min(96%,760px)] flex-row-reverse items-start gap-2 sm:max-w-[min(90%,760px)] sm:gap-3">
           <UserAvatar className="mt-0.5" />
 
           <div className="flex min-w-0 flex-1 flex-col items-end gap-2">
@@ -472,7 +471,7 @@ export default function UserMessage({
                 {content.length > 0 && (
                   <div
                     className={cn(
-                      "max-w-full whitespace-pre-wrap break-words rounded-[18px] px-4 py-3 text-[14px] leading-6",
+                      "max-w-full whitespace-pre-wrap break-words rounded-[18px] px-3 py-2.5 text-[14px] leading-6 sm:px-4 sm:py-3",
                       isDark
                         ? "bg-white/[0.08] text-zinc-100"
                         : "bg-zinc-100 text-zinc-900",

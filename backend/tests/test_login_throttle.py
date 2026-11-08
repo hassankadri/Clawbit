@@ -226,7 +226,7 @@ def test_v2_upgrade_preserves_owner_sessions_and_creates_backup(
             )
         }
 
-    assert version == 3
+    assert version == 5
     assert {
         "scope",
         "bucket",

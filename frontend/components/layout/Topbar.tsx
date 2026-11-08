@@ -10,6 +10,7 @@ import {
   FileText,
   FolderInput,
   MoreHorizontal,
+  Menu,
   Moon,
   Pin,
   PinOff,
@@ -51,6 +52,11 @@ export type ShareResult =
   | "empty";
 
 interface TopbarProps {
+  onOpenSidebar: () => void;
+  onImportHistory: () => void;
+  onOpenRevisions: () => void;
+  importingHistory: boolean;
+  workspaceId: string;
   theme: Theme;
   activeView: RouteView;
   notifications: NotificationItem[];
@@ -123,6 +129,11 @@ function ChatAction({
 }
 
 export default function Topbar({
+  onOpenSidebar,
+  onImportHistory,
+  onOpenRevisions,
+  importingHistory,
+  workspaceId,
   theme,
   activeView,
   notifications,
@@ -179,20 +190,29 @@ export default function Topbar({
 
   const modalView =
     activeView === "profile" ||
-    activeView === "customize" ||
-    activeView === "help";
+    activeView === "customize";
 
   const initialSection =
-    activeView === "profile"
-      ? ("profile" as const)
-      : activeView === "customize"
-        ? ("personalization" as const)
-        : ("help" as const);
+    activeView === "customize"
+      ? ("personalization" as const)
+      : ("profile" as const);
 
   return (
     <>
-      <header className="relative z-20 flex h-[58px] shrink-0 items-center justify-end bg-transparent px-4 text-[color:var(--foreground)] lg:px-5">
-        <div className="flex items-center gap-1">
+      <header className="relative z-20 flex h-[calc(58px+env(safe-area-inset-top))] shrink-0 items-center justify-between gap-2 bg-transparent pt-[env(safe-area-inset-top)] px-3 text-[color:var(--foreground)] sm:px-4 lg:justify-end lg:px-5">
+        <div className="flex min-w-0 items-center gap-2 lg:hidden">
+          <button
+            type="button"
+            aria-label="Open navigation"
+            title="Open menu"
+            onClick={onOpenSidebar}
+            className="ui-icon-button shrink-0"
+          >
+            <Menu size={19} />
+          </button>
+          <span className="truncate text-[14px] font-semibold tracking-tight">Clawbit</span>
+        </div>
+        <div className="flex min-w-0 items-center gap-1 sm:gap-1.5">
           {/* THEME */}
 
           <TopbarIconButton
@@ -369,13 +389,13 @@ export default function Topbar({
                     ? "Share chat"
                     : "Start a conversation to share"
                 }
-                className="ml-1 inline-flex h-9 items-center gap-2 rounded-lg px-3 text-xs hover:bg-[color:var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-35"
+                className="inline-flex h-9 w-9 shrink-0 items-center justify-center gap-2 rounded-lg px-0 text-xs hover:bg-[color:var(--accent-hover)] disabled:cursor-not-allowed disabled:opacity-35 sm:ml-1 sm:w-auto sm:px-3"
               >
                 <Share2 size={15} />
 
-                {shareState === "copied"
-                  ? "Copied"
-                  : "Share"}
+                <span className="hidden sm:inline">
+                  {shareState === "copied" ? "Copied" : "Share"}
+                </span>
               </button>
 
               <DropdownMenu.Root
@@ -402,8 +422,10 @@ export default function Topbar({
                     sideOffset={10}
                     align="end"
                     collisionPadding={12}
-                    className="ui-menu-surface z-[1200] w-[245px] p-1.5 outline-none"
+                    className="ui-menu-surface z-[1200] w-[min(280px,calc(100vw-24px))] max-h-[75dvh] overflow-y-auto p-1.5 outline-none"
                   >
+
+
                     <ChatAction
                       icon={
                         activeChatPinned ? PinOff : Pin
@@ -475,6 +497,13 @@ export default function Topbar({
                       onSelect={onViewFiles}
                     />
 
+                    <ChatAction
+                      icon={FileText}
+                      label="Saved revisions"
+                      disabled={!hasActiveChat}
+                      onSelect={onOpenRevisions}
+                    />
+
                     <DropdownMenu.Separator className="my-1 h-px bg-[color:var(--border)]" />
 
                     <ChatAction
@@ -489,6 +518,7 @@ export default function Topbar({
               </DropdownMenu.Root>
             </>
           )}
+
         </div>
       </header>
 
@@ -498,6 +528,9 @@ export default function Topbar({
         <SettingsWorkspace
           key={activeView}
           initialSection={initialSection}
+          workspaceId={workspaceId}
+          onImportBrowserHistory={onImportHistory}
+          importingBrowserHistory={importingHistory}
           onExitSettings={() =>
             onNavigate("chats")
           }

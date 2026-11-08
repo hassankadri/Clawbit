@@ -1,4 +1,5 @@
 "use client";
+import { createUuid } from "@/lib/uuid";
 
 import * as Dialog from "@radix-ui/react-dialog";
 import { Command } from "cmdk";
@@ -29,7 +30,6 @@ import Topbar, {
 import Welcome from "@/components/layout/Welcome";
 import WorkspacePanel from "@/components/layout/WorkspacePanel";
 
-import MemoryPanel from "@/components/settings/MemoryPanel";
 import SettingsWorkspace from "@/components/settings/SettingsWorkspace";
 
 import LibraryWorkspace from "@/components/library/LibraryWorkspace";
@@ -442,6 +442,9 @@ export default function AppShell({
       false,
     );
 
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const closeMobileSidebar = useCallback(() => setMobileSidebarOpen(false), []);
+
   const [
     notifications,
     setNotifications,
@@ -481,7 +484,7 @@ export default function AppShell({
     setActiveConversationId,
   ] =
     useState<string>(
-      () => crypto.randomUUID(),
+      () => createUuid(),
     );
 
   const [
@@ -702,7 +705,7 @@ export default function AppShell({
           NotificationItem =
           {
             id:
-              crypto.randomUUID(),
+              createUuid(),
 
             title,
 
@@ -965,7 +968,7 @@ export default function AppShell({
           NotificationItem =
           {
             id:
-              crypto.randomUUID(),
+              createUuid(),
 
             title:
               "Settings updated",
@@ -1761,7 +1764,7 @@ export default function AppShell({
      */
 
     setActiveConversationId(
-      crypto.randomUUID(),
+      createUuid(),
     );
 
     setComposerPrefill(
@@ -2170,7 +2173,7 @@ export default function AppShell({
     }
 
     const projectId =
-      crypto.randomUUID();
+      createUuid();
 
     const nextProject:
       ProjectRecord =
@@ -2549,11 +2552,21 @@ export default function AppShell({
   return (
     <main
       className={cn(
-        "relative flex h-screen overflow-hidden",
+        "relative flex h-[100dvh] min-h-0 w-full overflow-hidden",
         shellClass,
       )}
     >
+      {mobileSidebarOpen && (
+        <button
+          type="button"
+          aria-label="Close navigation menu"
+          onClick={closeMobileSidebar}
+          className="fixed inset-0 z-[100] bg-black/55 backdrop-blur-[2px] lg:hidden"
+        />
+      )}
       <Sidebar
+        mobileOpen={mobileSidebarOpen}
+        onCloseMobile={closeMobileSidebar}
         theme={
           theme
         }
@@ -2563,7 +2576,7 @@ export default function AppShell({
         }
 
         collapsed={
-          sidebarCollapsed
+          mobileSidebarOpen ? false : sidebarCollapsed
         }
 
         pinnedChats={
@@ -2607,11 +2620,10 @@ export default function AppShell({
           )
         }
 
-        onOpenCommandPalette={() =>
-          setCommandOpen(
-            true,
-          )
-        }
+        onOpenCommandPalette={() => {
+          closeMobileSidebar();
+          setCommandOpen(true);
+        }}
 
         onOpenConversation={
           openConversation
@@ -2632,6 +2644,7 @@ export default function AppShell({
 
       <div className="relative flex min-w-0 flex-1 flex-col">
         <Topbar
+          onOpenSidebar={() => setMobileSidebarOpen(true)}
           theme={
             theme
           }
@@ -2712,23 +2725,17 @@ export default function AppShell({
           onDeleteChat={
             deleteActiveChat
           }
+          onImportHistory={() => void importBrowserHistory()}
+          onOpenRevisions={() => void openRevisions()}
+          importingHistory={importingHistory}
+          workspaceId={createSnapshot().workspaceId ?? activeProjectId ?? threadId}
         />
 
-        <div className="flex flex-wrap items-center gap-3 border-b px-4 py-2 text-xs" aria-live="polite">
-          {(serverHistoryLoading || historyLoading) && <span>Loading saved history…</span>}
-          {(historyError || historyNotice) && <span role="alert">{historyError || historyNotice}</span>}
-          <button type="button" onClick={() => {
-            historyRefreshRef.current();
-            const snapshot = createSnapshot();
-            if (snapshot.serverPersisted) restoreSnapshot(snapshot);
-          }}>Reload history</button>
-          <button type="button" disabled={importingHistory || loading} onClick={() => void importBrowserHistory()}>
-            {importingHistory ? "Importing…" : "Import browser history"}
-          </button>
-          <span>Edit and regenerate create a new revision without running tools.</span>
-          <button type="button" disabled={loading || historyLoading} onClick={() => void openRevisions()}>Saved revisions</button>
-          <MemoryPanel key={threadId} workspaceId={createSnapshot().workspaceId ?? activeProjectId ?? threadId} />
-        </div>
+        {(historyError || historyNotice) && (
+          <div role="alert" aria-live="polite" className="border-b px-4 py-2 text-xs text-[color:var(--muted-foreground)]">
+            {historyError || historyNotice}
+          </div>
+        )}
 
         <Dialog.Root open={revisionThread !== null} onOpenChange={(open) => {
           if (!open) { revisionSelectionRef.current += 1; setRevisionThread(null); }
@@ -2945,6 +2952,9 @@ export default function AppShell({
           ) : activeView ===
             "settings" ? (
             <SettingsWorkspace
+              workspaceId={createSnapshot().workspaceId ?? activeProjectId ?? threadId}
+              onImportBrowserHistory={() => void importBrowserHistory()}
+              importingBrowserHistory={importingHistory}
               onExitSettings={() =>
                 setActiveView(
                   "chats",

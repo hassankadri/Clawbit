@@ -27,6 +27,36 @@ import {
 
 import type { SourceReference, ResearchReport } from "@/lib/knowledge";
 
+function createUuid(): string {
+  const cryptoApi = globalThis.crypto;
+
+  if (!cryptoApi || typeof cryptoApi.getRandomValues !== "function") {
+    throw new Error("Secure random ID generation is unavailable in this browser.");
+  }
+
+  if (typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+
+  // UUID v4 fallback for HTTP LAN development.
+  const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0")
+  ).join("");
+
+  return (
+    hex.slice(0, 8) + "-" +
+    hex.slice(8, 12) + "-" +
+    hex.slice(12, 16) + "-" +
+    hex.slice(16, 20) + "-" +
+    hex.slice(20)
+  );
+}
+
 export interface Message {
   createdAt?: number;
   attachmentIds?: string[];
@@ -112,7 +142,7 @@ export default function useChat(options: { persistent?: boolean } = {}) {
   ] =
     useState<string>(
       () =>
-        crypto.randomUUID(),
+        createUuid(),
     );
 
   const [
@@ -317,7 +347,7 @@ export default function useChat(options: { persistent?: boolean } = {}) {
         model,
         attachment_ids: attachmentIds,
         ...(persistent && turn ? {
-          request_id: crypto.randomUUID(), user_message_id: turn.userMessageId,
+          request_id: createUuid(), user_message_id: turn.userMessageId,
           assistant_message_id: assistantMessageId,
           expected_version: historyRef.current?.historyVersion,
           workspace_id: historyRef.current?.workspaceId,
@@ -437,7 +467,7 @@ export default function useChat(options: { persistent?: boolean } = {}) {
         createdAt: Date.now(),
         attachmentIds,
         id:
-          crypto.randomUUID(),
+          createUuid(),
 
         role:
           "user",
@@ -453,7 +483,7 @@ export default function useChat(options: { persistent?: boolean } = {}) {
     const assistantMessage: Message =
       {
         id:
-          crypto.randomUUID(),
+          createUuid(),
 
         role:
           "assistant",
@@ -515,7 +545,7 @@ export default function useChat(options: { persistent?: boolean } = {}) {
 
 
     setThreadId(
-      crypto.randomUUID(),
+      createUuid(),
     );
   }
 
@@ -724,7 +754,7 @@ export default function useChat(options: { persistent?: boolean } = {}) {
     const assistantMessage: Message =
       {
         id:
-          crypto.randomUUID(),
+          createUuid(),
 
         role:
           "assistant",
@@ -868,7 +898,7 @@ export default function useChat(options: { persistent?: boolean } = {}) {
     const assistantMessage: Message =
       {
         id:
-          crypto.randomUUID(),
+          createUuid(),
 
         role:
           "assistant",

@@ -185,7 +185,7 @@ export default function Welcome({
 
   return (
     <section className="relative flex min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col justify-center px-5 pb-[15vh] pt-16 sm:px-8">
+      <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col justify-start px-3 pb-8 pt-8 sm:justify-center sm:px-8 sm:pb-[15vh] sm:pt-16">
         <div className="mb-7 text-center">
           <h1
             className={cn(

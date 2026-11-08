@@ -1,3 +1,4 @@
+import { createUuid } from "@/lib/uuid";
 export type LibraryFileKind =
   | "image"
   | "document";
@@ -198,7 +199,7 @@ export async function saveLibraryFile(
   const now = Date.now();
 
   const record: LibraryFile = {
-    id: crypto.randomUUID(),
+    id: createUuid(),
 
     name: file.name,
 
@@ -380,7 +381,7 @@ export async function createLibraryFolder(
 
   const folder: LibraryFolder =
     {
-      id: crypto.randomUUID(),
+      id: createUuid(),
       name: trimmed,
       createdAt: now,
       updatedAt: now,

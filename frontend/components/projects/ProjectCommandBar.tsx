@@ -1,4 +1,5 @@
 "use client";
+import { createUuid } from "@/lib/uuid";
 
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as Popover from "@radix-ui/react-popover";
@@ -427,7 +428,7 @@ export default function ProjectCommandBar({
       if (imageError) { window.alert(imageError); continue; }
 
       const localId =
-        crypto.randomUUID();
+        createUuid();
 
       const kind:
         AttachmentKind =

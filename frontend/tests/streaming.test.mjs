@@ -20,6 +20,7 @@ beforeEach(async () => {
   globalThis.fetch = async () => Response.json({
     user: { username: "fixture-owner", principal_id: "b".repeat(64) },
     csrf_token: "a".repeat(64), expires_at: Date.now() / 1000 + 3600,
+    setup_required: false,
   });
   await auth.restoreSession();
 });

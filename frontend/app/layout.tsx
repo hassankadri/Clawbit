@@ -1,5 +1,5 @@
 
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 
 import ThemeProvider from "@/components/providers/ThemeProvider";
 import AppShell from "@/components/layout/AppShell";
@@ -8,6 +8,12 @@ import MCPApprovalDialog from "@/components/mcp/MCPApprovalDialog";
 
 import "./globals.css";
 import "./history-toolbar.css";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   title: "Clawbit AI",
@@ -24,7 +30,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className="bg-background text-foreground antialiased">
+      <body suppressHydrationWarning className="bg-background text-foreground antialiased">
         <ThemeProvider>
           <AuthProvider>
             <AppShell>{children}</AppShell>

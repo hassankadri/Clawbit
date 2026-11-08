@@ -16,9 +16,12 @@ const session = {
   user: {
     username: "offline-owner",
     principal_id: principal,
+    email: "owner@example.com",
+    role: "admin",
   },
   csrf_token: "a".repeat(64),
   expires_at: Date.now() / 1000 + 3600,
+  setup_required: false,
 };
 
 function fakeIndexedDB() {

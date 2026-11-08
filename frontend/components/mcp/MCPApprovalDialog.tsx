@@ -1,4 +1,3 @@
-
 "use client";
 
 import * as Dialog from "@radix-ui/react-dialog";
@@ -152,13 +151,13 @@ export default function MCPApprovalDialog() {
 
             <div className="min-w-0 flex-1">
               <Dialog.Title className="text-[16px] font-semibold">
-                Approve external action
+                Approve connector access
               </Dialog.Title>
 
               <Dialog.Description className="mt-1 text-[12px] leading-5 text-[color:var(--muted-foreground)]">
-                Clawbit wants to perform an action using a
-                connected service. Review the details before
-                allowing it.
+                Clawbit wants to access or change data through a
+                connected service. Review the service, tool and
+                arguments before allowing it.
               </Dialog.Description>
             </div>
           </div>
@@ -177,7 +176,7 @@ export default function MCPApprovalDialog() {
                   </span>
 
                   <span className="text-[color:var(--muted-foreground)]">
-                    Action
+                    Tool
                   </span>
 
                   <span className="break-all font-medium">
@@ -202,9 +201,9 @@ export default function MCPApprovalDialog() {
                   />
 
                   <span>
-                    Approving may change data outside Clawbit.
-                    Only approve actions you explicitly
-                    requested and whose arguments you recognise.
+                    Approval may expose external data to Clawbit
+                    or change data in the connected service. Only
+                    approve requests you initiated and understand.
                     Approval expires automatically.
                   </span>
                 </div>

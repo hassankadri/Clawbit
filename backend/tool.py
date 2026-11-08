@@ -20,6 +20,8 @@ from untrusted_content import EXTERNAL_DATA_POLICY, safe_tool_error, untrusted_d
 from web_fetch import WebFetchError, fetch_webpage
 from usage_limits import UsageLimitError, limited
 
+from web_read_guard import webpage_url_is_authorized
+
 
 ENV_PATH = Path(__file__).resolve().parent / ".env"
 load_dotenv(ENV_PATH)
@@ -429,17 +431,42 @@ def get_stock_price(company: str) -> str:
 
 @tool
 @limited("tool")
-def read_webpage(url: str) -> str:
+def read_webpage(
+    url: str,
+    runtime: ToolRuntime,
+) -> str:
     """
-    Read the contents of a webpage.
-    Use this when the user provides a URL and asks to summarize or explain it.
+    Read a webpage explicitly supplied by the user
+    or returned by web search in the current conversation.
     """
+    configurable = (
+        runtime.config.get("configurable", {}) or {}
+    )
+    state = runtime.state or {}
+    messages = state.get("messages", [])
+
+    # Verify permission BEFORE making any network request.
+    if not webpage_url_is_authorized(
+        url,
+        user_query=configurable.get("user_query", ""),
+        messages=messages,
+    ):
+        return (
+            "Could not read webpage: This URL was not supplied "
+            "by you or returned by web search in this chat."
+        )
+
     try:
         result = fetch_webpage(url)
         header, _, content = result.partition("\n\n")
         final_url = header.removeprefix("Source: ")
         source = register_web_source(final_url, final_url, content)
-        return f"[{source['source_id']}]\n{result}" if source else result
+
+        return (
+            f"[{source['source_id']}]\n{result}"
+            if source else result
+        )
+
     except WebFetchError as exc:
         return f"Could not read webpage: {exc}"
 

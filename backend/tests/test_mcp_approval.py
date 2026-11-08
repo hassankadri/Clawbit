@@ -1,4 +1,3 @@
-
 """Offline security regression tests for MCP action approval."""
 
 import asyncio
@@ -20,8 +19,8 @@ from ownership import owner_context
 @pytest.mark.parametrize(
     "name,metadata,expected",
     [
-        ("list_issues", {"readOnlyHint": True}, False),
-        ("get_file", {"readOnlyHint": True}, False),
+        ("list_issues", {"readOnlyHint": True}, True),
+        ("get_file", {"readOnlyHint": True}, True),
         ("create_issue", {"readOnlyHint": True}, True),
         ("deleteRepository", {"readOnlyHint": True}, True),
         ("post_message", {}, True),
@@ -44,6 +43,7 @@ def test_explicit_approval_is_one_time():
                     timeout=2,
                 )
             )
+
             await asyncio.sleep(0)
 
             actions = pending_approvals()
@@ -51,10 +51,12 @@ def test_explicit_approval_is_one_time():
             assert actions[0]["provider"] == "github"
 
             approval_id = actions[0]["id"]
+
             assert decide_approval(approval_id, True)
             assert not decide_approval(approval_id, True)
 
             await task
+
             assert pending_approvals() == []
 
     asyncio.run(scenario())
@@ -71,9 +73,11 @@ def test_denial_prevents_approval():
                     timeout=2,
                 )
             )
+
             await asyncio.sleep(0)
 
             approval_id = pending_approvals()[0]["id"]
+
             assert decide_approval(approval_id, False)
 
             with pytest.raises(ApprovalRejected, match="denied"):
@@ -111,7 +115,9 @@ def test_one_owner_cannot_approve_another_owners_action():
                     timeout=2,
                 )
             )
+
             await asyncio.sleep(0)
+
             approval_id = pending_approvals()[0]["id"]
 
         with owner_context("owner-two"):
@@ -141,9 +147,11 @@ def test_approval_arguments_redact_credentials():
                     timeout=2,
                 )
             )
+
             await asyncio.sleep(0)
 
             item = pending_approvals()[0]
+
             assert "private-example-value" not in item["arguments"]
             assert "[REDACTED]" in item["arguments"]
 
@@ -163,6 +171,7 @@ def test_anonymous_cannot_access_approval_endpoints(auth_store):
         client.headers["Origin"] = "http://localhost:3000"
 
         assert client.get("/mcp/approvals").status_code == 401
+
         assert (
             client.post(
                 "/mcp/approvals/unknown",
@@ -196,5 +205,6 @@ def test_approval_decision_requires_csrf(owner_client):
         )
 
         assert response.status_code == 403
+
     finally:
         owner_client.headers["X-CSRF-Token"] = token

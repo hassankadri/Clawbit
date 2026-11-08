@@ -63,6 +63,7 @@ test("changing verified principal aborts prior requests", async () => {
   globalThis.fetch = async () => Response.json({
     user: { username: "test-owner", principal_id: principal },
     csrf_token: "c".repeat(64), expires_at: Date.now() / 1000 + 300,
+    setup_required: false,
   });
   await auth.restoreSession();
   let signal;

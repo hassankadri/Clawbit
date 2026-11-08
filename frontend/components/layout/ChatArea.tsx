@@ -1,16 +1,13 @@
-
 "use client";
 
 import { ArrowDown } from "lucide-react";
-
 import {
+  useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
-  type TouchEvent as ReactTouchEvent,
-  type WheelEvent as ReactWheelEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type TouchEvent as ReactTouchEvent,
 } from "react";
 
 import Message from "@/components/chat/Message";
@@ -23,29 +20,21 @@ interface ChatAreaProps {
   loading: boolean;
   theme: Theme;
   assistantName: string;
-
   onEditMessage: (
     messageId: string,
     content: string,
   ) => Promise<void> | void;
-
   onDeleteMessage: (messageId: string) => void;
-
-  onRetryMessage: (
-    messageId: string,
-  ) => Promise<void> | void;
-
+  onRetryMessage: (messageId: string) => Promise<void> | void;
   onStopGeneration: () => void;
 }
 
 const BOTTOM_THRESHOLD = 96;
 
-function distanceFromBottom(element: HTMLElement): number {
+function getDistanceFromBottom(element: HTMLElement): number {
   return Math.max(
     0,
-    element.scrollHeight -
-      element.clientHeight -
-      element.scrollTop,
+    element.scrollHeight - element.clientHeight - element.scrollTop,
   );
 }
 
@@ -59,92 +48,62 @@ export default function ChatArea({
   onRetryMessage,
   onStopGeneration,
 }: ChatAreaProps) {
-  const scrollRef = useRef<HTMLDivElement | null>(null);
-  const contentRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const followRef = useRef(true);
   const lastScrollTopRef = useRef(0);
-
-  const firstMessageIdRef = useRef<string | undefined>(
-    messages[0]?.id,
-  );
-
+  const firstMessageIdRef = useRef<string | undefined>(messages[0]?.id);
   const messageCountRef = useRef(messages.length);
-
   const touchYRef = useRef<number | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
 
-  const resizeFrameRef = useRef<number | null>(null);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
-  const [showJumpToLatest, setShowJumpToLatest] =
-    useState(false);
+  /**
+   * Stop following new tokens when the user interacts with the chat.
+   * This ref changes synchronously, before the next React render.
+   */
+  const pauseFollowing = useCallback(() => {
+    followRef.current = false;
 
-  /* ==================================================== */
-  /* SCROLL TO LATEST                                     */
-  /* ==================================================== */
-
-  function scrollToLatest() {
     const viewport = scrollRef.current;
-
     if (!viewport) return;
 
-    /*
-     * Do not animate automatic scrolling.
-     *
-     * Repeated smooth-scroll commands compete with
-     * mouse and touch scrolling during streamed responses.
-     */
+    setShowJumpToLatest(getDistanceFromBottom(viewport) > 12);
+  }, []);
+
+  /**
+   * Follow the latest message only when explicitly requested.
+   */
+  const scrollToLatest = useCallback(() => {
+    const viewport = scrollRef.current;
+    if (!viewport) return;
 
     viewport.scrollTop = viewport.scrollHeight;
 
     lastScrollTopRef.current = viewport.scrollTop;
-
     followRef.current = true;
 
     setShowJumpToLatest(false);
-  }
+  }, []);
 
-  /* ==================================================== */
-  /* PAUSE AUTOMATIC FOLLOWING                            */
-  /* ==================================================== */
-
-  function pauseFollowing() {
-    followRef.current = false;
-
+  /**
+   * Native scrolling remains completely under the user's control.
+   */
+  const handleScroll = useCallback(() => {
     const viewport = scrollRef.current;
-
-    if (
-      viewport &&
-      viewport.scrollHeight > viewport.clientHeight + 2
-    ) {
-      setShowJumpToLatest(true);
-    }
-  }
-
-  /* ==================================================== */
-  /* NATIVE SCROLL TRACKING                               */
-  /* ==================================================== */
-
-  function handleScroll() {
-    const viewport = scrollRef.current;
-
     if (!viewport) return;
 
-    const distance = distanceFromBottom(viewport);
+    const distance = getDistanceFromBottom(viewport);
 
     const movingUp =
       viewport.scrollTop < lastScrollTopRef.current - 1;
 
     if (movingUp) {
-      /*
-       * Mouse, trackpad, scrollbar dragging and
-       * keyboard scrolling all pause auto-follow.
-       */
       followRef.current = false;
     } else if (distance <= 12) {
-      /*
-       * Resume when the user returns almost exactly
-       * to the bottom of the conversation.
-       */
+      // Returning to the bottom resumes automatic following.
       followRef.current = true;
     } else if (distance > BOTTOM_THRESHOLD) {
       followRef.current = false;
@@ -153,183 +112,165 @@ export default function ChatArea({
     lastScrollTopRef.current = viewport.scrollTop;
 
     setShowJumpToLatest(
-      !followRef.current &&
-        viewport.scrollHeight > viewport.clientHeight + 2,
+      !followRef.current && distance > 12,
     );
-  }
+  }, []);
 
-  /* ==================================================== */
-  /* MOUSE AND TRACKPAD                                   */
-  /* ==================================================== */
+  /**
+   * Pause automatic following on wheel input.
+   * Do not preventDefault: the browser must handle scrolling naturally.
+   */
+  const handleWheel = useCallback(() => {
+    pauseFollowing();
+  }, [pauseFollowing]);
 
-  function handleWheel(
-    event: ReactWheelEvent<HTMLDivElement>,
-  ) {
-    /*
-     * Pause before the browser performs upward scrolling.
-     *
-     * This avoids another streamed token pulling the
-     * conversation back down.
-     */
-    if (event.deltaY < 0) {
+  const handleTouchStart = useCallback(
+    (event: ReactTouchEvent<HTMLDivElement>) => {
+      touchYRef.current =
+        event.touches[0]?.clientY ?? null;
+
       pauseFollowing();
-    }
-  }
+    },
+    [pauseFollowing],
+  );
 
-  /* ==================================================== */
-  /* TOUCH SCROLLING                                      */
-  /* ==================================================== */
+  const handleTouchMove = useCallback(
+    (event: ReactTouchEvent<HTMLDivElement>) => {
+      const nextY = event.touches[0]?.clientY;
 
-  function handleTouchStart(
-    event: ReactTouchEvent<HTMLDivElement>,
-  ) {
-    touchYRef.current =
-      event.touches[0]?.clientY ?? null;
-  }
+      if (nextY === undefined) return;
 
-  function handleTouchMove(
-    event: ReactTouchEvent<HTMLDivElement>,
-  ) {
-    const nextY = event.touches[0]?.clientY;
+      if (
+        touchYRef.current !== null &&
+        Math.abs(nextY - touchYRef.current) > 2
+      ) {
+        pauseFollowing();
+      }
 
-    if (nextY === undefined) return;
+      touchYRef.current = nextY;
+    },
+    [pauseFollowing],
+  );
 
-    if (
-      touchYRef.current !== null &&
-      nextY > touchYRef.current + 2
-    ) {
-      /*
-       * Moving a finger downward scrolls toward
-       * earlier messages.
-       */
-      pauseFollowing();
-    }
+  const handleKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      const target = event.target as HTMLElement;
 
-    touchYRef.current = nextY;
-  }
+      if (
+        target.matches("input, textarea, select") ||
+        target.isContentEditable
+      ) {
+        return;
+      }
 
-  /* ==================================================== */
-  /* KEYBOARD SCROLLING                                   */
-  /* ==================================================== */
+      if (
+        ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "]
+          .includes(event.key)
+      ) {
+        pauseFollowing();
+      }
+    },
+    [pauseFollowing],
+  );
 
-  function handleKeyDown(
-    event: ReactKeyboardEvent<HTMLDivElement>,
-  ) {
-    const target = event.target as HTMLElement;
-
-    if (
-      target.matches("input,textarea,select") ||
-      target.isContentEditable
-    ) {
-      return;
-    }
-
-    if (
-      ["ArrowUp", "PageUp", "Home"].includes(event.key)
-    ) {
-      pauseFollowing();
-    }
-  }
-
-  /* ==================================================== */
-  /* MESSAGE UPDATES                                      */
-  /* ==================================================== */
-
-  useLayoutEffect(() => {
+  /**
+   * Stream updates are coalesced into animation frames.
+   * Crucially, the frame checks followRef again before moving the viewport.
+   * A wheel event can therefore cancel auto-follow before the next token.
+   */
+  useEffect(() => {
     const viewport = scrollRef.current;
-
     if (!viewport) return;
 
     const firstId = messages[0]?.id;
-
     const conversationChanged =
       firstMessageIdRef.current !== firstId;
 
     firstMessageIdRef.current = firstId;
     messageCountRef.current = messages.length;
 
+    if (animationFrameRef.current !== null) {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+
     if (conversationChanged) {
       followRef.current = true;
 
       if (messages.length <= 1) {
-        /*
-         * Keep the first message at the beginning
-         * of a new conversation.
-         */
         viewport.scrollTop = 0;
         lastScrollTopRef.current = 0;
 
-        /*
-         * Reset after layout, rather than calling
-         * setState synchronously inside the effect.
-         *
-         * Cancel if messages change again before
-         * this animation frame executes.
-         */
-        const frameId = window.requestAnimationFrame(() => {
+        animationFrameRef.current = window.requestAnimationFrame(() => {
+          animationFrameRef.current = null;
           setShowJumpToLatest(false);
         });
 
         return () => {
-          window.cancelAnimationFrame(frameId);
+          if (animationFrameRef.current !== null) {
+            window.cancelAnimationFrame(animationFrameRef.current);
+            animationFrameRef.current = null;
+          }
         };
-      } else {
-        /*
-         * Opening an existing conversation starts
-         * at its latest messages.
-         */
-        scrollToLatest();
       }
+    }
 
+    if (!followRef.current || messages.length <= 1) {
       return;
     }
 
-    /*
-     * Streamed text can update the existing assistant
-     * message without adding another message to the array.
-     *
-     * Only follow if the user has not scrolled away.
-     */
-    if (messages.length > 1 && followRef.current) {
-      scrollToLatest();
-    }
+    animationFrameRef.current = window.requestAnimationFrame(() => {
+      animationFrameRef.current = null;
+
+      // The user may have started scrolling since this effect was scheduled.
+      if (!followRef.current) return;
+
+      const currentViewport = scrollRef.current;
+      if (!currentViewport) return;
+
+      if (conversationChanged) {
+        setShowJumpToLatest(false);
+      }
+
+      currentViewport.scrollTop = currentViewport.scrollHeight;
+      lastScrollTopRef.current = currentViewport.scrollTop;
+    });
+
+    return () => {
+      if (animationFrameRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
+      }
+    };
   }, [messages, loading]);
 
-  /* ==================================================== */
-  /* DYNAMIC CONTENT HEIGHT                               */
-  /* ==================================================== */
-
+  /**
+   * Markdown and code blocks can change height without a new message.
+   * ResizeObserver follows those changes only while follow mode is active.
+   */
   useEffect(() => {
     const content = contentRef.current;
+    if (!content || typeof ResizeObserver === "undefined") return;
 
-    if (
-      !content ||
-      typeof ResizeObserver === "undefined"
-    ) {
-      return;
-    }
-
-    /*
-     * Markdown, images and streamed text may change
-     * height without changing the message count.
-     *
-     * The observer follows those changes only while
-     * auto-follow is enabled.
-     */
     const observer = new ResizeObserver(() => {
-      if (resizeFrameRef.current !== null) {
-        cancelAnimationFrame(resizeFrameRef.current);
+      if (animationFrameRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameRef.current);
       }
 
-      resizeFrameRef.current = requestAnimationFrame(() => {
-        resizeFrameRef.current = null;
+      animationFrameRef.current = window.requestAnimationFrame(() => {
+        animationFrameRef.current = null;
 
-        if (
-          followRef.current &&
-          messageCountRef.current > 1
-        ) {
-          scrollToLatest();
+        const viewport = scrollRef.current;
+        if (!viewport) return;
+
+        if (followRef.current && messageCountRef.current > 1) {
+          viewport.scrollTop = viewport.scrollHeight;
+          lastScrollTopRef.current = viewport.scrollTop;
+          return;
         }
+
+        const distance = getDistanceFromBottom(viewport);
+        setShowJumpToLatest(distance > 12);
       });
     });
 
@@ -338,53 +279,52 @@ export default function ChatArea({
     return () => {
       observer.disconnect();
 
-      if (resizeFrameRef.current !== null) {
-        cancelAnimationFrame(resizeFrameRef.current);
-        resizeFrameRef.current = null;
+      if (animationFrameRef.current !== null) {
+        window.cancelAnimationFrame(animationFrameRef.current);
+        animationFrameRef.current = null;
       }
     };
   }, []);
 
-  /* ==================================================== */
-  /* UI                                                   */
-  /* ==================================================== */
-
   return (
     <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-      {/* SCROLLABLE CONVERSATION */}
-
       <div
         ref={scrollRef}
         tabIndex={0}
         role="region"
         aria-label="Conversation messages"
         onScroll={handleScroll}
-        onWheel={handleWheel}
+        onWheelCapture={handleWheel}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={() => {
           touchYRef.current = null;
         }}
+        onPointerDownCapture={(event) => {
+          if (event.target === event.currentTarget) {
+            pauseFollowing();
+          }
+        }}
         onKeyDown={handleKeyDown}
-        className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain focus:outline-none"
+        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-auto focus:outline-none"
         style={{
           overflowAnchor: "none",
+          scrollBehavior: "auto",
+          WebkitOverflowScrolling: "touch",
         }}
       >
         <div
           ref={contentRef}
-          className="mx-auto w-full max-w-[860px] px-5 pb-12 pt-10 sm:px-7 sm:pt-12 lg:px-8 lg:pt-14"
+          className="mx-auto w-full max-w-[860px] px-3 pb-8 pt-5 sm:px-7 sm:pb-12 sm:pt-10 lg:px-8 lg:pt-14"
         >
-          <div className="flex flex-col gap-7">
+          <div className="flex flex-col gap-5 sm:gap-7">
             {messages.map((message, index) => (
               <div
                 key={message.id}
                 className="animate-[chat-message-enter_180ms_cubic-bezier(0.2,0,0,1)_both]"
                 style={{
                   animationDelay:
-                    index === messages.length - 1
-                      ? "0ms"
-                      : undefined,
+                    index === messages.length - 1 ? "0ms" : undefined,
                 }}
               >
                 <Message
@@ -402,16 +342,14 @@ export default function ChatArea({
         </div>
       </div>
 
-      {/* JUMP TO LATEST */}
-
-      {showJumpToLatest && (
+      {showJumpToLatest && messages.length > 1 && (
         <button
           type="button"
           onClick={scrollToLatest}
           aria-label="Jump to latest message"
           title="Jump to latest message"
           className={cn(
-            "absolute bottom-5 left-1/2 z-20 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full border px-3 text-xs font-medium shadow-lg transition-colors",
+            "absolute bottom-5 left-1/2 z-20 flex h-9 -translate-x-1/2 items-center gap-2 rounded-full border px-3 text-xs font-medium shadow-lg transition-all duration-200",
             theme === "dark"
               ? "border-white/15 bg-[#242424] text-zinc-100 hover:bg-[#303030]"
               : "border-black/10 bg-white text-zinc-800 hover:bg-zinc-100",

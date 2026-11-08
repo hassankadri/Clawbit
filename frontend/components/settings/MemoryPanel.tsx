@@ -50,10 +50,17 @@ export default function MemoryPanel({ workspaceId }: { workspaceId: string }) {
     setLoaded(false);
     setError("");
   }}>
-    <Dialog.Trigger asChild><button type="button">Saved memory</button></Dialog.Trigger>
+    <Dialog.Trigger asChild>
+      <button
+        type="button"
+        className="inline-flex min-h-10 items-center justify-center rounded-lg border border-[color:var(--border-strong)] bg-[color:var(--surface)] px-4 text-xs font-medium text-[color:var(--foreground)] transition-colors hover:bg-[color:var(--accent-hover)]"
+      >
+        Manage saved memories
+      </button>
+    </Dialog.Trigger>
     <Dialog.Portal>
-      <Dialog.Overlay className="fixed inset-0 z-50 bg-black/50" />
-      <Dialog.Content className="fixed left-1/2 top-1/2 z-50 max-h-[80vh] w-[min(90vw,680px)] -translate-x-1/2 -translate-y-1/2 overflow-auto rounded-xl border bg-background p-6 text-foreground shadow-xl">
+      <Dialog.Overlay className="fixed inset-0 z-[1500] bg-black/60 backdrop-blur-[2px]" />
+      <Dialog.Content className="fixed left-1/2 top-1/2 z-[1501] max-h-[85dvh] w-[min(94vw,680px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border bg-background p-4 text-foreground shadow-xl sm:p-6">
         <Dialog.Title className="font-semibold">Saved memory</Dialog.Title>
         <Dialog.Description className="my-3 text-sm text-muted-foreground">
           Save only facts or preferences you want reused. Workspace memory stays in this workspace;

@@ -1,5 +1,7 @@
-
 "use client";
+
+import { createUuid } from "@/lib/uuid";
+
 
 import * as Popover from "@radix-ui/react-popover";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -469,7 +471,7 @@ export default function Composer({
       }
 
       const uploadFile = normalizeUploadFile(file);
-      const localId = crypto.randomUUID();
+      const localId = createUuid();
 
       if (!kind) {
         setAttachments((current) => [
@@ -1002,14 +1004,14 @@ export default function Composer({
   const isDark = theme === "dark";
 
   return (
-    <div className="px-5 pb-5 pt-2 lg:px-8">
+    <div className="px-2.5 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pb-5 lg:px-8">
       <div
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={(event) => void handleDrop(event)}
         className={cn(
-          "mx-auto max-w-[860px] overflow-visible rounded-[26px] border transition-colors",
+          "mx-auto max-w-[860px] overflow-visible rounded-[20px] border transition-colors sm:rounded-[26px]",
           isDark
             ? "border-white/[0.09] bg-[#202020]"
             : "border-black/[0.10] bg-white",
@@ -1029,7 +1031,7 @@ export default function Composer({
                 <div
                   key={item.id}
                   className={cn(
-                    "flex max-w-[300px] items-center gap-2 rounded-xl border px-3 py-2",
+                    "flex max-w-full items-center gap-2 rounded-xl border px-3 py-2 sm:max-w-[300px]",
                     item.status === "error"
                       ? isDark
                         ? "border-red-500/30 bg-red-500/[0.08] text-red-100"
@@ -1096,7 +1098,7 @@ export default function Composer({
 
         {/* COMMAND BAR */}
 
-        <div className="grid min-h-[56px] grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-x-1 px-2 py-[7px]">
+        <div className="grid min-h-[56px] grid-cols-[40px_minmax(0,1fr)] items-center gap-x-1 gap-y-1 px-2 py-[7px] sm:grid-cols-[40px_minmax(0,1fr)_auto]">
           {/* ADD FILES */}
 
           <DropdownMenu.Root>
@@ -1170,7 +1172,7 @@ export default function Composer({
               }
             }}
             className={cn(
-              "block w-full min-w-0 resize-none border-0 bg-transparent px-3 py-0 text-[15px] font-normal leading-[24px] tracking-[-0.01em]",
+              "block w-full min-w-0 resize-none border-0 bg-transparent px-2 py-0 text-[16px] font-normal leading-[24px] tracking-[-0.01em] sm:px-3 sm:text-[15px]",
               "outline-none ring-0 shadow-none focus:border-0 focus:outline-none focus:ring-0 focus:shadow-none",
               "focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none",
               isDark
@@ -1187,7 +1189,7 @@ export default function Composer({
 
           {/* RIGHT CONTROLS */}
 
-          <div className="flex h-10 shrink-0 items-center gap-0.5">
+          <div className="col-span-2 flex h-10 w-full min-w-0 items-center justify-between gap-2 sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:w-auto sm:justify-end sm:gap-0.5">
             {/* MODEL SELECTOR */}
 
             <Popover.Root
@@ -1200,7 +1202,7 @@ export default function Composer({
                   whileTap={{ scale: 0.97 }}
                   aria-label="Choose model and chat mode"
                   className={cn(
-                    "flex h-9 max-w-[215px] shrink-0 items-center gap-1.5 rounded-[10px] border border-transparent px-2.5 text-[12px] font-medium transition-colors",
+                    "flex h-9 w-[min(185px,55vw)] max-w-[215px] shrink-0 items-center gap-1.5 rounded-[10px] border border-transparent px-2 text-[12px] font-medium transition-colors sm:w-auto sm:px-2.5",
                     isDark
                       ? "text-zinc-300 hover:bg-white/[0.06] hover:text-white"
                       : "text-zinc-700 hover:bg-black/[0.045] hover:text-black",
@@ -1215,7 +1217,7 @@ export default function Composer({
                     <Telescope size={14} className="shrink-0" />
                   )}
 
-                  <span className="max-w-[165px] truncate">
+                  <span className="max-w-[105px] truncate sm:max-w-[165px]">
                     {selectedModel.label}
                   </span>
 
@@ -1260,7 +1262,7 @@ export default function Composer({
                     }}
                     transition={{ duration: 0.18 }}
                     className={cn(
-                      "z-[200] w-[330px] origin-bottom-right rounded-[16px] border p-2 shadow-[0_18px_55px_rgba(0,0,0,0.18)]",
+                      "z-[200] w-[min(330px,calc(100vw-24px))] max-h-[min(70dvh,520px)] overflow-y-auto origin-bottom-right rounded-[16px] border p-2 shadow-[0_18px_55px_rgba(0,0,0,0.18)]",
                       isDark
                         ? "border-white/[0.09] bg-[#181818] text-white"
                         : "border-black/[0.10] bg-white text-zinc-900",
@@ -1359,7 +1361,7 @@ export default function Composer({
               >
                 <div
                   aria-hidden="true"
-                  className="flex h-6 items-center gap-[3px]"
+                  className="hidden h-6 items-center gap-[3px] sm:flex"
                 >
                   {audioLevels.map((height, index) => (
                     <span

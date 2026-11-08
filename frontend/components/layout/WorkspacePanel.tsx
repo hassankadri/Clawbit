@@ -7,11 +7,9 @@ import {
   Info,
   RotateCcw,
   Save,
-  Search,
   SlidersHorizontal,
   Telescope,
   UserRound,
-  X,
 } from "lucide-react";
 
 import {
@@ -1439,377 +1437,184 @@ function PersonalizationWorkspace() {
 /* ====================================================== */
 
 function HelpWorkspace() {
-  const [
-    search,
-    setSearch,
-  ] =
-    useState(
-      "",
-    );
-
-  const [
-    selectedId,
-    setSelectedId,
-  ] =
-    useState(
-      helpArticles[0]
-        .id,
-    );
-
-  const [
-    copyStatus,
-    setCopyStatus,
-  ] =
-    useState<
-      string | null
-    >(
-      null,
-    );
-
-  const filtered =
-    useMemo(
-      () => {
-        const query =
-          search
-            .trim()
-            .toLowerCase();
-
-        if (
-          !query
-        ) {
-          return helpArticles;
-        }
-
-        return helpArticles.filter(
-          (
-            article,
-          ) =>
-            [
-              article.category,
-              article.title,
-              article.summary,
-              ...article.body,
-
-              ...(
-                article.steps ??
-                []
-              ),
-            ]
-              .join(
-                " ",
-              )
-              .toLowerCase()
-              .includes(
-                query,
-              ),
-        );
-      },
-      [
-        search,
-      ],
-    );
-
-  const activeArticle =
-    filtered.find(
-      (
-        article,
-      ) =>
-        article.id ===
-        selectedId,
-    ) ??
-    filtered[
-      0
-    ] ??
-    null;
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const featureArticles = useMemo(
+    () => helpArticles.filter((article) =>
+      ["getting-started", "projects", "research", "mcp", "files"].includes(article.id)
+    ),
+    [],
+  );
 
   async function copyDiagnostics() {
     const lines = [
       "Clawbit diagnostics",
-
       `URL: ${window.location.href}`,
-
       `Browser: ${navigator.userAgent}`,
-
       `Time: ${new Date().toISOString()}`,
-
-      `Theme: ${
-        document.documentElement.classList.contains(
-          "dark",
-        )
-          ? "dark"
-          : "light"
-      }`,
-
+      `Theme: ${document.documentElement.classList.contains("dark") ? "dark" : "light"}`,
       `Chat mode: ${getActiveChatMode()}`,
     ];
 
     try {
-      await navigator.clipboard.writeText(
-        lines.join(
-          "\n",
-        ),
-      );
-
-      setCopyStatus(
-        "Diagnostics copied.",
-      );
+      await navigator.clipboard.writeText(lines.join("\n"));
+      setCopyStatus("Diagnostics copied.");
     } catch {
-      setCopyStatus(
-        "Clipboard access was blocked.",
-      );
+      setCopyStatus("Clipboard access was blocked.");
     }
   }
 
   return (
     <>
       <PageHeader
-        icon={
-          CircleHelp
-        }
+        icon={CircleHelp}
         title="Help & Docs"
-        description="Search Clawbit help for chats, Projects, Research mode, files, MCP, and keyboard shortcuts."
+        description="A practical guide to what Clawbit does, how to use it and what to keep in mind."
       />
 
-      {/* SEARCH */}
+      <Card className="mb-7 overflow-hidden p-5 sm:p-8">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[color:var(--muted-foreground)]">
+          CLAWBIT / USER GUIDE
+        </p>
+        <h2 className="mt-3 max-w-2xl text-[25px] font-semibold tracking-[-0.04em] text-[color:var(--foreground)] sm:text-[32px]">
+          Your AI workspace.
+          <span className="block text-[color:var(--muted-foreground)]">Chat, research, create and organize.</span>
+        </h2>
+        <p className="mt-4 max-w-2xl text-[13px] leading-7 text-[color:var(--muted-foreground)]">
+          Clawbit brings AI conversations, web research, file analysis, projects and connected tools into one workspace.
+          Choose an available AI model, give it the context it needs, and keep related work together.
+        </p>
+        <div className="mt-6 flex flex-wrap gap-2">
+          {['AI chat', 'Research', 'File analysis', 'Projects', 'Connected tools'].map((item) => (
+            <span key={item} className="rounded-full border border-[color:var(--border)] px-3 py-1.5 text-[11px]">{item}</span>
+          ))}
+        </div>
+      </Card>
 
-      <div className="relative mb-5 max-w-[620px]">
-        <Search
-          size={
-            14
-          }
-          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[color:var(--muted-foreground)]"
-        />
-
-        <input
-          value={
-            search
-          }
-          onChange={(
-            event,
-          ) =>
-            setSearch(
-              event.target
-                .value,
-            )
-          }
-          placeholder="Search Help & Docs"
-          className="h-10 w-full rounded-[11px] border border-[color:var(--border)] bg-[color:var(--surface)] pl-9 pr-9 text-[12px] text-[color:var(--foreground)] outline-none shadow-none placeholder:text-[color:var(--muted-foreground)] focus:border-[color:var(--border-strong)] focus:outline-none focus:ring-0"
-        />
-
-        {search ? (
-          <button
-            type="button"
-            onClick={() =>
-              setSearch(
-                "",
-              )
-            }
-            aria-label="Clear help search"
-            className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-[color:var(--muted-foreground)] hover:bg-[color:var(--accent-hover)] hover:text-[color:var(--foreground)]"
-          >
-            <X
-              size={
-                11
-              }
-            />
-          </button>
-        ) : null}
-      </div>
-
-      <div className="grid min-h-[430px] gap-4 lg:grid-cols-[280px_minmax(0,1fr)]">
-        {/* ARTICLE LIST */}
-
-        <Card className="h-fit p-2">
-          {filtered.length >
-          0 ? (
-            filtered.map(
-              (
-                article,
-              ) => {
-                const active =
-                  activeArticle?.id ===
-                  article.id;
-
-                return (
-                  <button
-                    key={
-                      article.id
-                    }
-                    type="button"
-                    onClick={() =>
-                      setSelectedId(
-                        article.id,
-                      )
-                    }
-                    className={cn(
-                      "w-full rounded-[11px] px-3 py-3 text-left transition-colors",
-
-                      active
-                        ? "bg-[color:var(--surface-alt)]"
-                        : "hover:bg-[color:var(--accent-hover)]",
-                    )}
-                  >
-                    <p className="text-[9px] uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
-                      {
-                        article.category
-                      }
-                    </p>
-
-                    <p className="mt-1 text-[11px] font-medium text-[color:var(--foreground)]">
-                      {
-                        article.title
-                      }
-                    </p>
-                  </button>
-                );
-              },
-            )
-          ) : (
-            <p className="px-3 py-8 text-center text-[11px] text-[color:var(--muted-foreground)]">
-              No help article
-              matched your search.
+      <section className="mb-8">
+        <h2 className="text-[17px] font-semibold">What can Clawbit do?</h2>
+        <p className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+          The main capabilities available in your workspace.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {featureArticles.map((article) => (
+            <Card key={article.id} className="p-4 sm:p-5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">{article.category}</p>
+              <h3 className="mt-2 text-[13px] font-semibold">{article.title}</h3>
+              <p className="mt-2 text-xs leading-6 text-[color:var(--muted-foreground)]">{article.summary}</p>
+              <ul className="mt-3 space-y-2">
+                {article.body.map((line) => (
+                  <li key={line} className="flex gap-2 text-[11px] leading-5 text-[color:var(--foreground)]">
+                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[color:var(--muted-foreground)]" />
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          ))}
+          <Card className="p-4 sm:p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Personal context</p>
+            <h3 className="mt-2 text-[13px] font-semibold">Memory and revisions</h3>
+            <p className="mt-2 text-xs leading-6 text-[color:var(--muted-foreground)]">
+              Save useful facts and preferences for future chats. Revisit earlier saved conversation revisions from the chat options menu.
             </p>
-          )}
-        </Card>
+          </Card>
+          <Card className="p-4 sm:p-5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--muted-foreground)]">Workspace</p>
+            <h3 className="mt-2 text-[13px] font-semibold">Library and saved work</h3>
+            <p className="mt-2 text-xs leading-6 text-[color:var(--muted-foreground)]">
+              Keep related conversations and project files organized, and return to files available in your workspace.
+            </p>
+          </Card>
+        </div>
+      </section>
 
-        {/* ARTICLE */}
-
-        <Card>
-          {activeArticle ? (
-            <article>
-              <p className="text-[10px] uppercase tracking-[0.18em] text-[color:var(--muted-foreground)]">
-                {
-                  activeArticle.category
-                }
-              </p>
-
-              <h2 className="mt-2 text-[18px] font-semibold tracking-[-0.02em] text-[color:var(--foreground)]">
-                {
-                  activeArticle.title
-                }
-              </h2>
-
-              <p className="mt-2 text-[11px] leading-5 text-[color:var(--muted-foreground)]">
-                {
-                  activeArticle.summary
-                }
-              </p>
-
-              <div className="mt-5 space-y-3">
-                {activeArticle.body.map(
-                  (
-                    paragraph,
-                  ) => (
-                    <p
-                      key={
-                        paragraph
-                      }
-                      className="text-[12px] leading-6 text-[color:var(--foreground)]"
-                    >
-                      {
-                        paragraph
-                      }
-                    </p>
-                  ),
-                )}
-              </div>
-
-              {activeArticle.steps
-                ?.length ? (
-                <div className="mt-6 border-t border-[color:var(--border)] pt-5">
-                  <p className="text-[11px] font-medium text-[color:var(--foreground)]">
-                    Steps
-                  </p>
-
-                  <ol className="mt-3 space-y-2">
-                    {activeArticle.steps.map(
-                      (
-                        step,
-                        index,
-                      ) => (
-                        <li
-                          key={
-                            step
-                          }
-                          className="flex gap-3 text-[11px] leading-5 text-[color:var(--muted-foreground)]"
-                        >
-                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[color:var(--surface-alt)] text-[9px] text-[color:var(--foreground)]">
-                            {
-                              index +
-                              1
-                            }
-                          </span>
-
-                          <span>
-                            {
-                              step
-                            }
-                          </span>
-                        </li>
-                      ),
-                    )}
-                  </ol>
+      <section className="mb-8">
+        <h2 className="text-[17px] font-semibold">Getting started</h2>
+        <p className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">Start your first conversation in four steps.</p>
+        <Card className="mt-4 p-4 sm:p-6">
+          <ol className="space-y-4">
+            {[
+              ["Start a chat", "Choose New chat from the sidebar, or open an existing conversation."],
+              ["Choose a model", "Select an available model in the composer. Use Research mode when your question needs deeper web research."],
+              ["Add context", "Use the + button to attach a supported document or image when the answer should use your file."],
+              ["Send and refine", "Ask your question, review the response, and send follow-up instructions to improve it."],
+            ].map(([title, detail], index) => (
+              <li key={title} className="flex gap-3">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[color:var(--surface-alt)] text-[11px] font-semibold">{index + 1}</span>
+                <div>
+                  <p className="text-xs font-semibold">{title}</p>
+                  <p className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">{detail}</p>
                 </div>
-              ) : null}
-            </article>
-          ) : (
-            <div className="flex min-h-[300px] items-center justify-center text-[11px] text-[color:var(--muted-foreground)]">
-              Choose a help
-              article.
-            </div>
-          )}
+              </li>
+            ))}
+          </ol>
         </Card>
-      </div>
+      </section>
 
-      {/* DIAGNOSTICS */}
+      <section className="mb-8">
+        <h2 className="text-[17px] font-semibold">Important limitations</h2>
+        <p className="mt-1 text-xs leading-5 text-[color:var(--muted-foreground)]">
+          Clawbit is an AI workspace. Keep these limits in mind when using it.
+        </p>
+        <Card className="mt-4 p-4 sm:p-6">
+          <ul className="space-y-3">
+            {[
+              "AI responses can be incorrect or incomplete. Verify important information and decisions.",
+              "Available models depend on provider configuration, credentials, quotas and service availability.",
+              "Research uses sources that can be reached at the time. It may miss relevant information or contain outdated material.",
+              "File analysis depends on supported formats, upload limits and the quality of the file's contents.",
+              "Connected tools need a working connector, the correct permissions and availability from the external service.",
+              "Memory reuses information that has been saved. Workspace and personal memory have different scopes. Never save passwords, API keys or secrets.",
+              "Browser backups cover browser-stored Clawbit data. They do not include backend uploads, databases, environment variables or MCP credentials.",
+            ].map((item) => (
+              <li key={item} className="flex gap-2 text-xs leading-6 text-[color:var(--foreground)]">
+                <span className="mt-2 h-1 w-1 shrink-0 rounded-full bg-[color:var(--muted-foreground)]" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </section>
 
-      <Card className="mt-4 flex flex-wrap items-center justify-between gap-4">
+      <section className="mb-8">
+        <h2 className="text-[17px] font-semibold">Useful shortcuts</h2>
+        <Card className="mt-4 p-4 sm:p-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            {[
+              ["Ctrl / Cmd + K", "Open the command palette"],
+              ["Enter", "Send a message"],
+              ["Shift + Enter", "Add a new line"],
+            ].map(([shortcut, action]) => (
+              <div key={shortcut}>
+                <kbd className="rounded-md border border-[color:var(--border)] bg-[color:var(--surface-alt)] px-2 py-1 text-[11px]">{shortcut}</kbd>
+                <p className="mt-2 text-[11px] text-[color:var(--muted-foreground)]">{action}</p>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </section>
+
+      <Card className="flex flex-wrap items-center justify-between gap-4 p-4 sm:p-5">
         <div className="flex items-start gap-3">
-          <Clipboard
-            size={
-              15
-            }
-            className="mt-0.5 text-[color:var(--muted-foreground)]"
-          />
-
+          <Clipboard size={16} className="mt-0.5 text-[color:var(--muted-foreground)]" />
           <div>
-            <p className="text-[11px] font-medium text-[color:var(--foreground)]">
-              Need debugging
-              information?
-            </p>
-
-            <p className="mt-1 text-[10px] text-[color:var(--muted-foreground)]">
-              Copy non-secret
-              browser diagnostics
-              for a bug report.
-            </p>
+            <p className="text-xs font-medium">Need to report a problem?</p>
+            <p className="mt-1 text-[11px] text-[color:var(--muted-foreground)]">Copy basic, non-secret browser diagnostics.</p>
           </div>
         </div>
-
         <div className="flex items-center gap-3">
-          {copyStatus ? (
-            <span className="text-[10px] text-[color:var(--muted-foreground)]">
-              {
-                copyStatus
-              }
-            </span>
-          ) : null}
-
-          <SecondaryButton
-            onClick={() =>
-              void copyDiagnostics()
-            }
-          >
-            <Clipboard
-              size={
-                14
-              }
-            />
-
+          {copyStatus && <span role="status" className="text-[11px] text-[color:var(--muted-foreground)]">{copyStatus}</span>}
+          <SecondaryButton onClick={() => void copyDiagnostics()}>
+            <Clipboard size={14} />
             Copy diagnostics
           </SecondaryButton>
         </div>
       </Card>
+
+      <footer className="pb-5 pt-8 text-center">
+        <p className="text-[10px] font-medium uppercase tracking-[0.22em] text-[color:var(--muted-foreground)]">Clawbit</p>
+        <p className="mt-2 text-[11px] text-[color:var(--muted-foreground)]">Created by Hassan Kadri</p>
+      </footer>
     </>
   );
 }
@@ -1824,7 +1629,7 @@ export default function WorkspacePanel({
   onExitSettings,
 }: WorkspacePanelProps) {
   const pageClass =
-    "mx-auto h-full min-h-0 w-full max-w-[1050px] overflow-y-auto px-5 pb-12 pt-7 lg:px-8 lg:pt-9";
+    "mx-auto h-full min-h-0 w-full max-w-[1050px] overflow-y-auto px-3 pb-8 pt-5 sm:px-5 sm:pb-12 sm:pt-7 lg:px-8 lg:pt-9";
 
   /* ==================================================== */
   /* MCP TOOLS                                            */
