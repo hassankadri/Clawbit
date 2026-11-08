@@ -199,7 +199,7 @@ export default function Topbar({
 
   return (
     <>
-      <header className="relative z-20 flex h-[calc(58px+env(safe-area-inset-top))] shrink-0 items-center justify-between gap-2 bg-transparent pt-[env(safe-area-inset-top)] px-3 text-[color:var(--foreground)] sm:px-4 lg:justify-end lg:px-5">
+      <header className="clawbit-topbar relative z-20 flex h-[calc(58px+env(safe-area-inset-top))] shrink-0 items-center justify-between gap-2 bg-transparent pt-[env(safe-area-inset-top)] px-3 text-[color:var(--foreground)] sm:px-4 lg:justify-end lg:px-5">
         <div className="flex min-w-0 items-center gap-2 lg:hidden">
           <button
             type="button"
