@@ -1004,14 +1004,14 @@ export default function Composer({
   const isDark = theme === "dark";
 
   return (
-    <div className="px-2.5 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pb-5 lg:px-8">
+    <div className="clawbit-composer-shell px-2.5 pb-[calc(0.5rem+env(safe-area-inset-bottom))] pt-2 sm:px-5 sm:pb-5 lg:px-8">
       <div
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={(event) => void handleDrop(event)}
         className={cn(
-          "mx-auto max-w-[860px] overflow-visible rounded-[20px] border transition-colors sm:rounded-[26px]",
+          "clawbit-composer-card mx-auto max-w-[860px] overflow-visible rounded-[20px] border transition-colors sm:rounded-[26px]",
           isDark
             ? "border-white/[0.09] bg-[#202020]"
             : "border-black/[0.10] bg-white",
@@ -1098,7 +1098,7 @@ export default function Composer({
 
         {/* COMMAND BAR */}
 
-        <div className="grid min-h-[56px] grid-cols-[40px_minmax(0,1fr)] items-center gap-x-1 gap-y-1 px-2 py-[7px] sm:grid-cols-[40px_minmax(0,1fr)_auto]">
+        <div className="clawbit-composer-grid grid min-h-[56px] grid-cols-[40px_minmax(0,1fr)] items-center gap-x-1 gap-y-1 px-2 py-[7px] sm:grid-cols-[40px_minmax(0,1fr)_auto]">
           {/* ADD FILES */}
 
           <DropdownMenu.Root>
@@ -1109,7 +1109,7 @@ export default function Composer({
                 aria-label="Add files"
                 title="Add files"
                 className={cn(
-                  "flex h-10 w-10 items-center justify-center rounded-full transition-colors",
+                  "clawbit-composer-add flex h-10 w-10 items-center justify-center rounded-full transition-colors",
                   isDark
                     ? "text-zinc-300 hover:bg-white/[0.07] hover:text-white"
                     : "text-zinc-600 hover:bg-black/[0.055] hover:text-black",
@@ -1172,7 +1172,7 @@ export default function Composer({
               }
             }}
             className={cn(
-              "block w-full min-w-0 resize-none border-0 bg-transparent px-2 py-0 text-[16px] font-normal leading-[24px] tracking-[-0.01em] sm:px-3 sm:text-[15px]",
+              "clawbit-composer-input block w-full min-w-0 resize-none border-0 bg-transparent px-2 py-0 text-[16px] font-normal leading-[24px] tracking-[-0.01em] sm:px-3 sm:text-[15px]",
               "outline-none ring-0 shadow-none focus:border-0 focus:outline-none focus:ring-0 focus:shadow-none",
               "focus-visible:border-0 focus-visible:outline-none focus-visible:ring-0 focus-visible:shadow-none",
               isDark
@@ -1189,7 +1189,7 @@ export default function Composer({
 
           {/* RIGHT CONTROLS */}
 
-          <div className="col-span-2 flex h-10 w-full min-w-0 items-center justify-between gap-2 sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:w-auto sm:justify-end sm:gap-0.5">
+          <div className="clawbit-composer-controls col-span-2 flex h-10 w-full min-w-0 items-center justify-between gap-2 sm:col-span-1 sm:col-start-3 sm:row-start-1 sm:w-auto sm:justify-end sm:gap-0.5">
             {/* MODEL SELECTOR */}
 
             <Popover.Root
@@ -1202,7 +1202,7 @@ export default function Composer({
                   whileTap={{ scale: 0.97 }}
                   aria-label="Choose model and chat mode"
                   className={cn(
-                    "flex h-9 w-[min(185px,55vw)] max-w-[215px] shrink-0 items-center gap-1.5 rounded-[10px] border border-transparent px-2 text-[12px] font-medium transition-colors sm:w-auto sm:px-2.5",
+                    "clawbit-model-trigger flex h-9 w-[min(185px,55vw)] max-w-[215px] shrink-0 items-center gap-1.5 rounded-[10px] border border-transparent px-2 text-[12px] font-medium transition-colors sm:w-auto sm:px-2.5",
                     isDark
                       ? "text-zinc-300 hover:bg-white/[0.06] hover:text-white"
                       : "text-zinc-700 hover:bg-black/[0.045] hover:text-black",
@@ -1353,7 +1353,7 @@ export default function Composer({
                 role="status"
                 aria-label="Dictation active"
                 className={cn(
-                  "ml-1 flex h-9 items-center gap-2 rounded-full border px-3",
+                  "clawbit-voice-control ml-1 flex h-9 items-center gap-2 rounded-full border px-3",
                   isDark
                     ? "border-white/[0.15] bg-[#2a2a2a] text-zinc-100"
                     : "border-black/[0.12] bg-zinc-100 text-zinc-900",
@@ -1393,7 +1393,7 @@ export default function Composer({
                   onClick={startVoiceRecording}
                   aria-label="Dictate"
                   className={cn(
-                    "flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",
+                    "clawbit-voice-button flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors",
                     isDark
                       ? "text-zinc-300 hover:bg-white/[0.07] hover:text-white"
                       : "text-zinc-600 hover:bg-black/[0.055] hover:text-black",
@@ -1416,7 +1416,7 @@ export default function Composer({
                 onClick={() => void send()}
                 aria-label="Send"
                 className={cn(
-                  "flex h-10 w-10 shrink-0 items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-50",
+                  "clawbit-send-button flex h-10 w-10 shrink-0 items-center justify-center rounded-full disabled:cursor-not-allowed disabled:opacity-50",
                   isDark
                     ? "bg-white text-black"
                     : "bg-black text-white",
@@ -1488,7 +1488,7 @@ function TooltipButton({
   children: ReactNode;
 }) {
   return (
-    <div className="group relative shrink-0">
+    <div className="clawbit-voice-tooltip group relative shrink-0">
       {children}
 
       <div
