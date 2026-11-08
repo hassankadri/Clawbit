@@ -306,7 +306,7 @@ export default function ChatArea({
           }
         }}
         onKeyDown={handleKeyDown}
-        className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-auto focus:outline-none"
+        className="clawbit-chat-scroller min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-y-auto focus:outline-none"
         style={{
           overflowAnchor: "none",
           scrollBehavior: "auto",
@@ -315,7 +315,7 @@ export default function ChatArea({
       >
         <div
           ref={contentRef}
-          className="mx-auto w-full max-w-[860px] px-3 pb-8 pt-5 sm:px-7 sm:pb-12 sm:pt-10 lg:px-8 lg:pt-14"
+          className="clawbit-chat-content mx-auto w-full max-w-[860px] px-3 pb-8 pt-5 sm:px-7 sm:pb-12 sm:pt-10 lg:px-8 lg:pt-14"
         >
           <div className="flex flex-col gap-5 sm:gap-7">
             {messages.map((message, index) => (
