@@ -28,7 +28,7 @@ Prefer a small number of managed services:
 
 - **Neon Postgres:** transactional application data, accounts/sessions, usage limits, connector state, conversation history, memory, and LangGraph checkpoints.
 - **Neon pgvector:** replace the embedded Chroma collection, subject to a retrieval/evaluation comparison and an explicit embedding-dimension decision.
-- **Vercel Blob (private access):** uploaded document/image bytes. Keep attachment metadata, ownership, status and manifests in Postgres; never expose private blob URLs without an authorization check.
+- **Neon Object Storage (private S3-compatible buckets; preferred candidate):** uploaded document/image bytes. Neon currently lists 5 GB object storage per Free project, with branch-aware objects. Keep attachment metadata, ownership, status and manifests in Postgres; use private buckets and backend-authorized access. Validate region availability, access signing, and migration volume before locking this choice. Vercel Blob remains a fallback (Hobby currently includes 1 GB storage/month and 10 GB transfer/month).
 - **No Redis initially:** use Postgres transactions and short-lived rows for coordination where reasonable. Add Redis only if measured contention or polling makes it necessary.
 
 Do not treat Vercel Function `/tmp` as durable storage. It is scratch space only.
@@ -115,9 +115,9 @@ References:
 
 ## 8. Open decisions before the first live Preview
 
-- Vercel plan (Hobby, Pro or Enterprise), which sets the available function execution budget.
-- Whether to use a stable custom domain, or the stable Vercel production hostname.
-- Existing local installation migration is required; a fresh hosted account is not acceptable.
+- **Vercel plan confirmed: Hobby (Free).** Treat the hosted app as a personal/non-commercial deployment; upgrade before commercial use.
+- Confirm the storage provider/region and align the Vercel Function region with the database/object-store region. Neon lists Singapore (`ap-southeast-1`) as an available region; Vercel supports `sin1`. Validate current account availability before setting it.
+- Existing local installation migration is required; a fresh hosted account is not acceptable. Keep original local files and data untouched.
 - Which OAuth/MCP integrations must be available in the first hosted release.
 
 ## References
