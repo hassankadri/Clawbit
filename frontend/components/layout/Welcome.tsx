@@ -33,6 +33,7 @@ interface Suggestion {
   id: string;
   icon: ComponentType<{ size?: number; className?: string }>;
   label: string;
+  mobileLabel: string;
   prompt: string;
   eyebrow: string;
 }
@@ -56,21 +57,24 @@ const suggestionGroups: Suggestion[][] = [
       id: "research",
       icon: Search,
       eyebrow: "RESEARCH",
-      label: "Explore a topic",
+      label: "Research a topic using current web sources",
+      mobileLabel: "Explore a topic",
       prompt: "Research a topic for me using current web sources. Compare the important information and give me a clear summary with sources.",
     },
     {
       id: "document",
       icon: FileSearch,
       eyebrow: "FILES",
-      label: "Analyze a document",
+      label: "Analyze a document or PDF I upload",
+      mobileLabel: "Analyze a document",
       prompt: "Help me analyze a document. I will upload the file and I want the important information explained clearly.",
     },
     {
       id: "plan",
       icon: ListTodo,
       eyebrow: "PLANNING",
-      label: "Build a step-by-step plan",
+      label: "Turn an idea into a clear step-by-step plan",
+      mobileLabel: "Build a step-by-step plan",
       prompt: "Help me turn my idea into a practical step-by-step plan with priorities and the best next action.",
     },
   ],
@@ -79,21 +83,24 @@ const suggestionGroups: Suggestion[][] = [
       id: "code",
       icon: WandSparkles,
       eyebrow: "DEVELOPMENT",
-      label: "Build or debug a project",
+      label: "Help me build or debug a software project",
+      mobileLabel: "Build or debug a project",
       prompt: "Help me build or debug a software project. Work through it step by step and explain what needs to be changed.",
     },
     {
       id: "github",
       icon: GitBranch,
       eyebrow: "GITHUB",
-      label: "Review code and repositories",
+      label: "Work with my GitHub repositories and code",
+      mobileLabel: "Review code and repositories",
       prompt: "Help me work with my GitHub repositories. Review the relevant code or recent activity and tell me what I should do next.",
     },
     {
       id: "rewrite",
       icon: MessageSquare,
       eyebrow: "WRITING",
-      label: "Write or improve something",
+      label: "Write, rewrite, or improve something",
+      mobileLabel: "Write or improve something",
       prompt: "Help me write or improve something. Keep it natural, clear, and well structured.",
     },
   ],
@@ -102,21 +109,24 @@ const suggestionGroups: Suggestion[][] = [
       id: "brainstorm",
       icon: Lightbulb,
       eyebrow: "IDEAS",
-      label: "Brainstorm new ideas",
+      label: "Brainstorm ideas and find the strongest options",
+      mobileLabel: "Brainstorm new ideas",
       prompt: "Brainstorm several strong ideas for me, explain the useful ones, and help me narrow them down.",
     },
     {
       id: "project",
       icon: Sparkles,
       eyebrow: "WORKSPACE",
-      label: "Find the next project steps",
+      label: "Review a project and suggest the best next steps",
+      mobileLabel: "Find the next project steps",
       prompt: "Review my project context and suggest the most useful next steps, priorities, and improvements.",
     },
     {
       id: "tools",
       icon: GitBranch,
       eyebrow: "CONNECTED TOOLS",
-      label: "Work with connected tools",
+      label: "Use connected tools like Drive, Notion, GitHub, and Slack",
+      mobileLabel: "Work with connected tools",
       prompt: "Help me use my connected tools to find or work with the information I need.",
     },
   ],
@@ -212,7 +222,8 @@ export default function Welcome({
                       </span>
                       <span className="min-w-0 flex-1 text-[14px] leading-5">
                         <span className="clawbit-suggestion-eyebrow hidden">{suggestion.eyebrow}</span>
-                        <span className="clawbit-suggestion-label">{suggestion.label}</span>
+                        <span className="clawbit-suggestion-label clawbit-suggestion-desktop-label">{suggestion.label}</span>
+                        <span className="clawbit-suggestion-label clawbit-suggestion-mobile-label">{suggestion.mobileLabel}</span>
                       </span>
                     </button>
 
@@ -226,7 +237,7 @@ export default function Welcome({
                       }}
                       className={cn(
                         "absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full",
-                        "scale-90 opacity-0 transition-all duration-150",
+                        "clawbit-suggestion-dismiss scale-90 opacity-0 transition-all duration-150",
                         "group-hover:scale-100 group-hover:opacity-100",
                         "group-focus-within:scale-100 group-focus-within:opacity-100",
                         isDark
