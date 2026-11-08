@@ -31,14 +31,10 @@ interface WelcomeProps {
 
 interface Suggestion {
   id: string;
-
-  icon: ComponentType<{
-    size?: number;
-    className?: string;
-  }>;
-
+  icon: ComponentType<{ size?: number; className?: string }>;
   label: string;
   prompt: string;
+  eyebrow: string;
 }
 
 const headings = [
@@ -59,80 +55,78 @@ const suggestionGroups: Suggestion[][] = [
     {
       id: "research",
       icon: Search,
-      label: "Research a topic using current web sources",
-      prompt:
-        "Research a topic for me using current web sources. Compare the important information and give me a clear summary with sources.",
+      eyebrow: "RESEARCH",
+      label: "Explore a topic",
+      prompt: "Research a topic for me using current web sources. Compare the important information and give me a clear summary with sources.",
     },
     {
       id: "document",
       icon: FileSearch,
-      label: "Analyze a document or PDF I upload",
-      prompt:
-        "Help me analyze a document. I will upload the file and I want the important information explained clearly.",
+      eyebrow: "FILES",
+      label: "Analyze a document",
+      prompt: "Help me analyze a document. I will upload the file and I want the important information explained clearly.",
     },
     {
       id: "plan",
       icon: ListTodo,
-      label: "Turn an idea into a clear step-by-step plan",
-      prompt:
-        "Help me turn my idea into a practical step-by-step plan with priorities and the best next action.",
+      eyebrow: "PLANNING",
+      label: "Build a step-by-step plan",
+      prompt: "Help me turn my idea into a practical step-by-step plan with priorities and the best next action.",
     },
   ],
   [
     {
       id: "code",
       icon: WandSparkles,
-      label: "Help me build or debug a software project",
-      prompt:
-        "Help me build or debug a software project. Work through it step by step and explain what needs to be changed.",
+      eyebrow: "DEVELOPMENT",
+      label: "Build or debug a project",
+      prompt: "Help me build or debug a software project. Work through it step by step and explain what needs to be changed.",
     },
     {
       id: "github",
       icon: GitBranch,
-      label: "Work with my GitHub repositories and code",
-      prompt:
-        "Help me work with my GitHub repositories. Review the relevant code or recent activity and tell me what I should do next.",
+      eyebrow: "GITHUB",
+      label: "Review code and repositories",
+      prompt: "Help me work with my GitHub repositories. Review the relevant code or recent activity and tell me what I should do next.",
     },
     {
       id: "rewrite",
       icon: MessageSquare,
-      label: "Write, rewrite, or improve something",
-      prompt:
-        "Help me write or improve something. Keep it natural, clear, and well structured.",
+      eyebrow: "WRITING",
+      label: "Write or improve something",
+      prompt: "Help me write or improve something. Keep it natural, clear, and well structured.",
     },
   ],
   [
     {
       id: "brainstorm",
       icon: Lightbulb,
-      label: "Brainstorm ideas and find the strongest options",
-      prompt:
-        "Brainstorm several strong ideas for me, explain the useful ones, and help me narrow them down.",
+      eyebrow: "IDEAS",
+      label: "Brainstorm new ideas",
+      prompt: "Brainstorm several strong ideas for me, explain the useful ones, and help me narrow them down.",
     },
     {
       id: "project",
       icon: Sparkles,
-      label: "Review a project and suggest the best next steps",
-      prompt:
-        "Review my project context and suggest the most useful next steps, priorities, and improvements.",
+      eyebrow: "WORKSPACE",
+      label: "Find the next project steps",
+      prompt: "Review my project context and suggest the most useful next steps, priorities, and improvements.",
     },
     {
       id: "tools",
       icon: GitBranch,
-      label: "Use connected tools like Drive, Notion, GitHub, and Slack",
-      prompt:
-        "Help me use my connected tools to find or work with the information I need.",
+      eyebrow: "CONNECTED TOOLS",
+      label: "Work with connected tools",
+      prompt: "Help me use my connected tools to find or work with the information I need.",
     },
   ],
 ];
 
 function hashString(value: string): number {
   let hash = 0;
-
   for (let index = 0; index < value.length; index += 1) {
     hash = (hash * 31 + value.charCodeAt(index)) >>> 0;
   }
-
   return hash;
 }
 
@@ -143,50 +137,34 @@ export default function Welcome({
   composer,
 }: WelcomeProps) {
   const isDark = theme === "dark";
-
-  // Keep dismissed suggestions separate for each conversation.
   const [dismissedByConversation, setDismissedByConversation] =
     useState<Record<string, string[]>>({});
 
-  const dismissedSuggestions =
-    dismissedByConversation[conversationKey] ?? [];
-
-  const heading = useMemo(() => {
-    const index = hashString(conversationKey) % headings.length;
-    return headings[index];
-  }, [conversationKey]);
-
-  const suggestions = useMemo(() => {
-    const index =
-      (hashString(conversationKey) + 3) % suggestionGroups.length;
-
-    return suggestionGroups[index];
-  }, [conversationKey]);
-
+  const dismissedSuggestions = dismissedByConversation[conversationKey] ?? [];
+  const heading = useMemo(
+    () => headings[hashString(conversationKey) % headings.length],
+    [conversationKey],
+  );
+  const suggestions = useMemo(
+    () => suggestionGroups[(hashString(conversationKey) + 3) % suggestionGroups.length],
+    [conversationKey],
+  );
   const visibleSuggestions = suggestions.filter(
-    (suggestion) =>
-      !dismissedSuggestions.includes(suggestion.id),
+    (suggestion) => !dismissedSuggestions.includes(suggestion.id),
   );
 
   function dismissSuggestion(id: string) {
     setDismissedByConversation((current) => {
       const currentDismissed = current[conversationKey] ?? [];
-
-      if (currentDismissed.includes(id)) {
-        return current;
-      }
-
-      return {
-        ...current,
-        [conversationKey]: [...currentDismissed, id],
-      };
+      if (currentDismissed.includes(id)) return current;
+      return { ...current, [conversationKey]: [...currentDismissed, id] };
     });
   }
 
   return (
-    <section className="relative flex min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex min-h-full w-full max-w-[820px] flex-col justify-start px-3 pb-8 pt-8 sm:justify-center sm:px-8 sm:pb-[15vh] sm:pt-16">
-        <div className="mb-7 text-center">
+    <section className="clawbit-welcome relative flex min-h-0 flex-1 overflow-y-auto">
+      <div className="clawbit-welcome-inner mx-auto flex min-h-full w-full max-w-[820px] flex-col justify-start px-3 pb-8 pt-8 sm:justify-center sm:px-8 sm:pb-[15vh] sm:pt-16">
+        <div className="clawbit-welcome-heading mb-7 text-center">
           <h1
             className={cn(
               "text-[27px] font-medium tracking-[-0.035em] sm:text-[30px]",
@@ -195,71 +173,73 @@ export default function Welcome({
           >
             {heading}
           </h1>
+          <p className="clawbit-mobile-subtitle mt-2 text-sm text-[color:var(--muted-foreground)]">
+            Your AI workspace for thinking, building and getting things done.
+          </p>
         </div>
 
-        {composer ? <div className="w-full">{composer}</div> : null}
+        {composer ? <div className="clawbit-welcome-composer w-full">{composer}</div> : null}
 
         {visibleSuggestions.length > 0 ? (
-          <div className="mx-auto mt-4 w-full max-w-[760px]">
-            {visibleSuggestions.map((suggestion) => {
-              const Icon = suggestion.icon;
-
-              return (
-                <div
-                  key={suggestion.id}
-                  className="group relative"
-                >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onSuggestionSelect(suggestion.prompt)
-                    }
-                    className={cn(
-                      "flex w-full items-center gap-3 rounded-[12px] py-3 pl-3 pr-11 text-left",
-                      "transition-[background-color,transform] duration-150 ease-out",
-                      "hover:translate-x-[2px]",
-                      isDark
-                        ? "text-zinc-300 hover:bg-white/[0.055] hover:text-white"
-                        : "text-zinc-700 hover:bg-black/[0.045] hover:text-zinc-950",
-                    )}
-                  >
-                    <span
+          <div className="clawbit-welcome-suggestions mx-auto mt-4 w-full max-w-[760px]">
+            <div className="clawbit-suggestions-label mb-2 hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-[color:var(--muted-foreground)]">
+              Try asking
+            </div>
+            <div className="clawbit-suggestions-grid">
+              {visibleSuggestions.map((suggestion) => {
+                const Icon = suggestion.icon;
+                return (
+                  <div key={suggestion.id} className="group relative min-w-0">
+                    <button
+                      type="button"
+                      onClick={() => onSuggestionSelect(suggestion.prompt)}
                       className={cn(
-                        "flex h-7 w-7 shrink-0 items-center justify-center",
-                        isDark ? "text-zinc-400" : "text-zinc-500",
+                        "clawbit-suggestion flex w-full items-center gap-3 rounded-[12px] py-3 pl-3 pr-11 text-left",
+                        "transition-[background-color,transform] duration-150 ease-out",
+                        "hover:translate-x-[2px]",
+                        isDark
+                          ? "text-zinc-300 hover:bg-white/[0.055] hover:text-white"
+                          : "text-zinc-700 hover:bg-black/[0.045] hover:text-zinc-950",
                       )}
                     >
-                      <Icon size={17} />
-                    </span>
+                      <span
+                        className={cn(
+                          "flex h-7 w-7 shrink-0 items-center justify-center",
+                          isDark ? "text-zinc-400" : "text-zinc-500",
+                        )}
+                      >
+                        <Icon size={17} />
+                      </span>
+                      <span className="min-w-0 flex-1 text-[14px] leading-5">
+                        <span className="clawbit-suggestion-eyebrow hidden">{suggestion.eyebrow}</span>
+                        <span className="clawbit-suggestion-label">{suggestion.label}</span>
+                      </span>
+                    </button>
 
-                    <span className="min-w-0 flex-1 text-[14px] leading-5">
-                      {suggestion.label}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    aria-label="Dismiss suggestion"
-                    title="Dismiss"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      dismissSuggestion(suggestion.id);
-                    }}
-                    className={cn(
-                      "absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full",
-                      "scale-90 opacity-0 transition-all duration-150",
-                      "group-hover:scale-100 group-hover:opacity-100",
-                      "group-focus-within:scale-100 group-focus-within:opacity-100",
-                      isDark
-                        ? "text-zinc-500 hover:bg-white/[0.09] hover:text-zinc-200"
-                        : "text-zinc-400 hover:bg-black/[0.07] hover:text-zinc-900",
-                    )}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              );
-            })}
+                    <button
+                      type="button"
+                      aria-label={`Dismiss ${suggestion.label} suggestion`}
+                      title="Dismiss"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        dismissSuggestion(suggestion.id);
+                      }}
+                      className={cn(
+                        "absolute right-2 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full",
+                        "scale-90 opacity-0 transition-all duration-150",
+                        "group-hover:scale-100 group-hover:opacity-100",
+                        "group-focus-within:scale-100 group-focus-within:opacity-100",
+                        isDark
+                          ? "text-zinc-500 hover:bg-white/[0.09] hover:text-zinc-200"
+                          : "text-zinc-400 hover:bg-black/[0.07] hover:text-zinc-900",
+                      )}
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         ) : null}
       </div>
