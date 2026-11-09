@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from ownership import current_owner, require_thread
 from postgres_db import postgres_connection
 
@@ -163,7 +164,7 @@ def create_upload_intent(
             SELECT COUNT(*) FROM upload_intents
             WHERE principal=? AND thread_id=? AND expires_at>?
             """,
-            (principal, thread_id, __import__("time").time()),
+            (principal, thread_id, time.time()),
         ).fetchone()[0]
         if committed + pending >= max_attachments:
             from upload_security import UploadError
@@ -218,9 +219,9 @@ def get_upload_intent(thread_id: str, attachment_id: str) -> dict | None:
             SELECT attachment_id,thread_id,staging_key,final_key,name,suffix,
                    mime_type,kind,expected_size,created_at,expires_at
             FROM upload_intents
-            WHERE principal=? AND thread_id=? AND attachment_id=?
+            WHERE principal=? AND thread_id=? AND attachment_id=? AND expires_at>?
             """,
-            (principal, thread_id, attachment_id),
+            (principal, thread_id, attachment_id, time.time()),
         ).fetchone()
 
     return dict(row) if row else None
@@ -292,13 +293,20 @@ def commit_upload_intent(
 
         intent = db.execute(
             """
-            SELECT final_key
+            SELECT final_key,expected_size,name,suffix,mime_type,kind
             FROM upload_intents
             WHERE principal=? AND thread_id=? AND attachment_id=? AND expires_at>?
             """,
             (principal, thread_id, attachment_id, __import__("time").time()),
         ).fetchone()
-        if intent is None or intent["final_key"] != object_key:
+        if (
+            intent is None
+            or intent["final_key"] != object_key
+            or int(record.get("size") or 0) != int(intent["expected_size"])
+            or record.get("name") != intent["name"]
+            or record.get("mime_type") != intent["mime_type"]
+            or record.get("kind") != intent["kind"]
+        ):
             raise OwnershipError()
 
         db.execute(
