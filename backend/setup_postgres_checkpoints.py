@@ -11,8 +11,6 @@ import sys
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
 from owned_postgres_checkpoints import OwnedPostgresSaver
 
 
