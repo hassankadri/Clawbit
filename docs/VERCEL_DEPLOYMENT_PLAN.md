@@ -18,7 +18,7 @@ The browser should continue calling the same-origin `/api` path. Configure the f
 Use the frontend origin for:
 - `CLAWBIT_ALLOWED_ORIGINS`
 - `CLAWBIT_FRONTEND_URL`
-- the public OAuth callback base URL (OAuth callbacks must also pass through the same `/api` rewrite so the browser session cookie is present).
+- OAuth redirect URLs registered with Google and Slack must use the frontend's same-origin `/api/mcp/oauth/<provider>/callback` URL. The frontend `/api` rewrite strips the prefix and forwards callbacks to FastAPI, preserving the host-only session cookie. Production callback generation uses the validated request `Origin` plus `/api`; it must never point to the separate backend Vercel hostname.
 
 Validate the forwarded scheme/host behavior in a Vercel Preview before allowing production authentication. Do not assume the local `production_server.py` proxy allowlist is the correct Vercel configuration.
 
@@ -205,7 +205,7 @@ The following work is mandatory before a usable Preview; the Next.js rewrite cha
 3. Replace Chroma with pgvector. Confirm the selected embedding model's actual output dimension, add an appropriate index strategy (or begin with exact search), persist per-thread/per-principal metadata filters, and validate cross-user isolation.
 4. Replace local upload files/manifests with private Neon Object Storage bytes plus Postgres metadata. Generate unpredictable object keys; authorize every read, write and delete in the backend. Use short-lived presigned operations only after owner authorization.
 5. Replace process-only OAuth state and pending MCP approvals with Postgres records that enforce TTL, one-time consumption, session binding and owner/principal binding.
-6. Remove production reliance on local data/, uploads/, chroma_db/, FlashRank writable cache, process PID leases, and process-only mutable connector state. Caches may be disposable only.
+6. Remove production reliance on local data/, uploads/, chroma_db/, FlashRank writable cache, process PID leases, and process-only mutable connector state. FlashRank cache is under `/tmp` and may be discarded on cold start; connector caches are disposable only.
 7. Resolve Notion/Stripe stdio npx connectors. Vercel Python functions must not rely on spawned local MCP processes or npm availability; use supported remote HTTP MCP endpoints or mark unsupported connectors unavailable in the first release.
 8. Reduce runtime dependencies and test bundle size under 500 MB. Remove chromadb, langchain-chroma, langgraph-checkpoint-sqlite, aiosqlite if no remaining runtime path needs them. Add a supported Postgres driver/checkpointer and S3 SDK with pinned versions.
 9. Add a durable async-job path for workflows that may exceed the 120-second external-rewrite timeout. Keep proxied SSE responses bounded; test browser aborts, client reconnects and function timeouts.
