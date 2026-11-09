@@ -67,10 +67,17 @@ def get_bytes(key: str, *, max_bytes: int) -> bytes:
         declared = response.get("ContentLength")
         if isinstance(declared, int) and declared > max_bytes:
             raise ValueError("Stored object exceeds the configured size limit.")
-        content = body.read(max_bytes + 1)
-        if len(content) > max_bytes:
-            raise ValueError("Stored object exceeds the configured size limit.")
-        return content
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = body.read(min(64 * 1024, max_bytes + 1 - total))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("Stored object exceeds the configured size limit.")
+            chunks.append(chunk)
+        return b"".join(chunks)
     finally:
         body.close()
 
