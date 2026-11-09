@@ -19,6 +19,12 @@ APPROVAL_TIMEOUT_SECONDS = 60
 MAX_PENDING_APPROVALS = 8
 MAX_ARGUMENT_BYTES = 8192
 
+
+def _postgres_enabled() -> bool:
+    import os
+
+    return os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres"
+
 SENSITIVE_KEYS = (
     "password",
     "secret",
@@ -116,6 +122,11 @@ async def require_mcp_approval(
             "MCP action arguments cannot be reviewed safely."
         ) from exc
 
+    if _postgres_enabled():
+        return await _require_postgres_approval(
+            owner, provider, tool, preview, timeout=timeout
+        )
+
     if len(_pending) >= MAX_PENDING_APPROVALS:
         raise ApprovalRejected(
             "Too many pending MCP approvals. Try again later."
@@ -158,8 +169,133 @@ async def require_mcp_approval(
         _pending.pop(approval.id, None)
 
 
+async def _require_postgres_approval(
+    owner: str,
+    provider: str,
+    tool: str,
+    preview: str,
+    *,
+    timeout: float,
+) -> None:
+    """Wait for a durable decision that can be posted by another function instance."""
+    import asyncio
+    from postgres_db import postgres_connection
+
+    now = time.time()
+    approval_id = uuid.uuid4().hex
+    expires_at = now + timeout
+
+    try:
+        with postgres_connection() as db:
+            db.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                (f"clawbit:approval:{owner}",),
+            )
+            db.execute(
+                "DELETE FROM pending_approvals WHERE expires_at <= ?",
+                (now,),
+            )
+            pending = db.execute(
+                """
+                SELECT COUNT(*)
+                FROM pending_approvals
+                WHERE owner=? AND decision IS NULL AND expires_at>?
+                """,
+                (owner, now),
+            ).fetchone()[0]
+            if pending >= MAX_PENDING_APPROVALS:
+                raise ApprovalRejected(
+                    "Too many pending MCP approvals. Try again later."
+                )
+            db.execute(
+                """
+                INSERT INTO pending_approvals
+                    (id,owner,provider,tool,arguments,created_at,expires_at,decision,decided_at)
+                VALUES(?,?,?,?,?,?,?,NULL,NULL)
+                """,
+                (approval_id, owner, provider, tool, preview, now, expires_at),
+            )
+    except ApprovalRejected:
+        raise
+    except Exception:
+        raise ApprovalRejected(
+            "MCP approval storage is temporarily unavailable. No external action was performed."
+        ) from None
+
+    try:
+        while True:
+            require_active_owner()
+            try:
+                with postgres_connection() as db:
+                    row = db.execute(
+                        """
+                        SELECT decision, expires_at
+                        FROM pending_approvals
+                        WHERE id=? AND owner=?
+                        """,
+                        (approval_id, owner),
+                    ).fetchone()
+            except Exception:
+                raise ApprovalRejected(
+                    "MCP approval status is unavailable. No external action was performed."
+                ) from None
+
+            if row is None:
+                raise ApprovalRejected(
+                    "MCP action approval was canceled. No external action was performed."
+                )
+            if row["decision"] is True:
+                require_active_owner()
+                return
+            if row["decision"] is False:
+                raise ApprovalRejected(
+                    "MCP action was denied. No external action was performed."
+                )
+            if row["expires_at"] <= time.time():
+                raise ApprovalRejected(
+                    "MCP action approval expired. No external action was performed."
+                )
+
+            await asyncio.sleep(0.5)
+    finally:
+        try:
+            with postgres_connection() as db:
+                db.execute(
+                    "DELETE FROM pending_approvals WHERE id=? AND owner=?",
+                    (approval_id, owner),
+                )
+        except Exception:
+            # A stale pending row expires and is deleted by the next admission.
+            pass
+
+
 def pending_approvals() -> list[dict[str, Any]]:
     owner = require_active_owner()
+    if _postgres_enabled():
+        from postgres_db import postgres_connection
+
+        now = time.time()
+        with postgres_connection() as db:
+            rows = db.execute(
+                """
+                SELECT id,provider,tool,arguments,expires_at
+                FROM pending_approvals
+                WHERE owner=? AND decision IS NULL AND expires_at>?
+                ORDER BY created_at
+                """,
+                (owner, now),
+            ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "provider": row["provider"],
+                "tool": row["tool"],
+                "arguments": row["arguments"],
+                "expires_in": max(0, int(row["expires_at"] - now)),
+            }
+            for row in rows
+        ]
+
     now = time.monotonic()
 
     return [
@@ -184,6 +320,24 @@ def decide_approval(
     approve: bool,
 ) -> bool:
     owner = require_active_owner()
+    if _postgres_enabled():
+        if type(approve) is not bool:
+            return False
+        from postgres_db import postgres_connection
+
+        now = time.time()
+        with postgres_connection() as db:
+            row = db.execute(
+                """
+                UPDATE pending_approvals
+                SET decision=?, decided_at=?
+                WHERE id=? AND owner=? AND decision IS NULL AND expires_at>?
+                RETURNING id
+                """,
+                (approve, now, approval_id, owner, now),
+            ).fetchone()
+        return row is not None
+
     item = _pending.get(approval_id)
 
     if (
@@ -206,6 +360,29 @@ def cancel_pending_approvals(
 ) -> None:
     """Revoke pending actions during connector changes or logout."""
     owner = current_owner()
+    if _postgres_enabled():
+        from postgres_db import postgres_connection
+
+        with postgres_connection() as db:
+            if provider is None:
+                db.execute(
+                    """
+                    UPDATE pending_approvals
+                    SET decision=FALSE, decided_at=?
+                    WHERE owner=? AND decision IS NULL
+                    """,
+                    (time.time(), owner),
+                )
+            else:
+                db.execute(
+                    """
+                    UPDATE pending_approvals
+                    SET decision=FALSE, decided_at=?
+                    WHERE owner=? AND provider=? AND decision IS NULL
+                    """,
+                    (time.time(), owner, provider),
+                )
+        return
 
     for item in list(_pending.values()):
         if (
