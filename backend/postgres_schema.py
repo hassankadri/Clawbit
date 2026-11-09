@@ -257,6 +257,24 @@ SCHEMA_STATEMENTS = (
     """,
     "CREATE INDEX IF NOT EXISTS rag_documents_owner_thread ON rag_documents(principal,thread_id,attachment_id)",
     """
+    CREATE TABLE IF NOT EXISTS upload_attachments (
+        principal TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        attachment_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size BIGINT NOT NULL,
+        object_key TEXT NOT NULL UNIQUE,
+        source TEXT NOT NULL,
+        preview TEXT,
+        rag_error TEXT,
+        created_at DOUBLE PRECISION NOT NULL,
+        PRIMARY KEY (principal,thread_id,attachment_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS upload_attachments_thread ON upload_attachments(principal,thread_id,created_at)",
+    """
     CREATE TABLE IF NOT EXISTS claims (
         claim_id TEXT PRIMARY KEY,
         principal_id TEXT NOT NULL,
