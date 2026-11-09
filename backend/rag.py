@@ -208,7 +208,7 @@ def _preview_text(text: str, limit: int = 5000) -> str:
 
 
 def get_attachment_records(thread_id: str, attachment_ids: list[str] | None = None) -> list[dict]:
-    require_thread(thread_id)
+    require_thread(thread_id, missing_ok=True)
     manifest = _load_manifest(thread_id)
 
     attachment_id_set = set(attachment_ids or [])
