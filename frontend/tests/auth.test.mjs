@@ -335,6 +335,7 @@ test("model, chat, SSE and connector helpers preserve credentials and CSRF", asy
 
 test("uploads send credentials and CSRF; expired sessions reject further uploads", async () => {
   await authenticated();
+  globalThis.fetch = async () => Response.json({ mode: "multipart" });
 
   const requests = [];
 
