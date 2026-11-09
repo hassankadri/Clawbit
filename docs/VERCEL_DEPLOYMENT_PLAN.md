@@ -156,6 +156,19 @@ The checkpoint database uses WAL mode. A migration backup must use SQLite's onli
 
 These counts are an observation snapshot, not a hard-coded expected production dataset. Re-run counts and hashes at export and post-import time; require exact reconciliation before cutover.
 
+## 10. Upload and vector inventory follow-up (2026-11-09)
+
+A read-only content/ownership inventory reported:
+
+- `backend/uploads`: 67 thread directories, all mapped to the admin principal; 17 manifest attachment records; 11.33 MB of existing referenced files counted.
+- 5 manifest records did not resolve to an existing file.
+- 1 manifest/path entry was classified as invalid by the first-pass scanner; the exact reason has not yet been isolated.
+- 5 physical files were not referenced by the manifests.
+- Chroma: 1 collection, 35 total embeddings, all 35 have `thread_id` metadata; 8 distinct threads, all mapped to the admin principal. No vector was missing thread metadata.
+- No user-owned uploads or vectors were reported by this scan.
+
+**Migration gate:** Do not migrate or discard any of the five missing-file records, the invalid record, or five unreferenced files until a second read-only diagnostic classifies the exact failure modes and checks each file against its manifest and Chroma attachment metadata. Preserve original folders and Chroma DB. The 35 vectors should be reindexed/compared after import, not treated as proven equivalent solely because thread metadata exists.
+
 ## References
 
 - Vercel FastAPI: https://vercel.com/docs/frameworks/backend/fastapi
