@@ -243,7 +243,12 @@ class HistoryStore:
                 if row["thread_id"] not in owned:
                     continue
                 item = dict(row)
-                messages = self._decode_messages(item.get("active_messages"))
+                try:
+                    messages = self._decode_messages(item.get("active_messages"))
+                except HistoryError:
+                    # Keep a corrupt revision isolated to its conversation preview.
+                    # The explicit history endpoint reports the 503 without deleting it.
+                    messages = []
                 item["preview"] = messages[-1]["content"][:200] if messages else ""
                 result.append(self._view(db, item, messages=False))
             return result
