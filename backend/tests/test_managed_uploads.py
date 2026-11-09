@@ -127,3 +127,167 @@ def test_manifest_rejects_malformed_object_metadata(monkeypatch):
 
     # Validation occurs before any mutation query.
     assert db.calls == []
+
+
+class SequenceConnection:
+    def __init__(self, rows):
+        self.rows = list(rows)
+        self.calls = []
+
+    def execute(self, sql, params=()):
+        self.calls.append((sql, params))
+        row = self.rows.pop(0) if self.rows else None
+        if isinstance(row, BaseException):
+            raise row
+        return Cursor(row=row)
+
+    def executemany(self, sql, params):
+        self.calls.append((sql, list(params)))
+        return Cursor()
+
+
+def test_create_upload_intent_reserves_slot_for_current_principal(monkeypatch):
+    db = SequenceConnection([(2,), (1,), None])
+    install(monkeypatch, db)
+
+    with owner_context("principal-upload"):
+        record = managed_uploads.create_upload_intent(
+            "thread-upload",
+            attachment_id="a" * 32,
+            staging_key="pending-uploads/random.pdf",
+            name="report.pdf",
+            suffix=".pdf",
+            mime_type="application/pdf",
+            kind="document",
+            expected_size=1234,
+            expires_at=9999999999,
+            max_attachments=10,
+        )
+
+    assert record["attachment_id"] == "a" * 32
+    assert record["expected_size"] == 1234
+    assert "pg_advisory_xact_lock" in db.calls[0][0]
+    assert db.calls[1][1] == ("principal-upload", "thread-upload")
+    assert db.calls[2][1][0:4] == (
+        "a" * 32,
+        "principal-upload",
+        "thread-upload",
+        "pending-uploads/random.pdf",
+    )
+    assert "INSERT INTO upload_intents" in db.calls[2][0]
+
+
+def test_create_upload_intent_rejects_when_attachment_slots_are_full(monkeypatch):
+    db = SequenceConnection([(10,), (0,)])
+    install(monkeypatch, db)
+
+    with owner_context("principal-full"):
+        with pytest.raises(Exception, match="at most 10 attachments"):
+            managed_uploads.create_upload_intent(
+                "thread-full",
+                attachment_id="b" * 32,
+                staging_key="pending-uploads/full.txt",
+                name="full.txt",
+                suffix=".txt",
+                mime_type="text/plain",
+                kind="document",
+                expected_size=100,
+                expires_at=9999999999,
+                max_attachments=10,
+            )
+
+    assert all("INSERT INTO upload_intents" not in call[0] for call in db.calls)
+
+
+def test_get_upload_intent_is_owner_and_expiry_scoped(monkeypatch):
+    row = HybridRow({
+        "attachment_id": "c" * 32,
+        "thread_id": "thread-c",
+        "staging_key": "pending-uploads/c.txt",
+        "final_key": None,
+        "name": "c.txt",
+        "suffix": ".txt",
+        "mime_type": "text/plain",
+        "kind": "document",
+        "expected_size": 12,
+        "created_at": 1.0,
+        "expires_at": 9999999999,
+    })
+    db = Connection(row=row)
+    install(monkeypatch, db)
+
+    with owner_context("principal-c"):
+        intent = managed_uploads.get_upload_intent("thread-c", "c" * 32)
+
+    sql, params = db.calls[0]
+    assert "principal=? AND thread_id=? AND attachment_id=? AND expires_at>?" in sql
+    assert params[:3] == ("principal-c", "thread-c", "c" * 32)
+    assert intent["staging_key"] == "pending-uploads/c.txt"
+
+
+def test_commit_upload_intent_is_atomic_and_rechecks_reservation(monkeypatch):
+    existing_row = None
+    reserved = HybridRow({
+        "final_key": "uploads/final.pdf",
+        "expected_size": 100,
+        "name": "report.pdf",
+        "suffix": ".pdf",
+        "mime_type": "application/pdf",
+        "kind": "document",
+    })
+    db = SequenceConnection([None, existing_row, reserved, None, None])
+    install(monkeypatch, db)
+    monkeypatch.setattr(managed_uploads, "require_thread", lambda thread: None)
+
+    record = {
+        "attachment_id": "d" * 32,
+        "name": "report.pdf",
+        "kind": "document",
+        "mime_type": "application/pdf",
+        "size": 100,
+        "path": "uploads/final.pdf",
+        "object_key": "uploads/final.pdf",
+        "source": "report.pdf",
+        "preview": "preview",
+        "rag_error": None,
+        "created_at": 5.0,
+    }
+    with owner_context("principal-d"):
+        saved = managed_uploads.commit_upload_intent("thread-d", "d" * 32, record)
+
+    assert saved["object_key"] == "uploads/final.pdf"
+    assert "pg_advisory_xact_lock" in db.calls[0][0]
+    assert "SELECT attachment_id,name,kind" in db.calls[1][0]
+    assert db.calls[1][1] == ("principal-d", "thread-d", "d" * 32)
+    assert "SELECT final_key,expected_size" in db.calls[2][0]
+    assert db.calls[2][1][:3] == ("principal-d", "thread-d", "d" * 32)
+    assert "INSERT INTO upload_attachments" in db.calls[3][0]
+    assert "DELETE FROM upload_intents" in db.calls[4][0]
+
+
+def test_commit_upload_intent_rejects_wrong_immutable_key(monkeypatch):
+    reserved = HybridRow({
+        "final_key": "uploads/expected.pdf",
+        "expected_size": 100,
+        "name": "report.pdf",
+        "suffix": ".pdf",
+        "mime_type": "application/pdf",
+        "kind": "document",
+    })
+    db = SequenceConnection([None, None, reserved])
+    install(monkeypatch, db)
+    monkeypatch.setattr(managed_uploads, "require_thread", lambda thread: None)
+
+    with owner_context("principal-e"):
+        with pytest.raises(OwnershipError):
+            managed_uploads.commit_upload_intent("thread-e", "e" * 32, {
+                "attachment_id": "e" * 32,
+                "name": "report.pdf",
+                "kind": "document",
+                "mime_type": "application/pdf",
+                "size": 100,
+                "path": "uploads/forged.pdf",
+                "object_key": "uploads/forged.pdf",
+            })
+
+    assert all("INSERT INTO upload_attachments" not in call[0] for call in db.calls)
