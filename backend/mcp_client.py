@@ -204,11 +204,13 @@ def _stdio_connection(
     variable: str,
     token: str,
 ) -> dict:
-    """Construct an stdio server using an approved, pinned package.
+    """Construct an stdio server using an approved, pinned package."""
+    if __import__("os").getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+        raise ValueError(
+            "This connector requires a local stdio process and is disabled in "
+            "the Vercel serverless deployment."
+        )
 
-    The caller selects a known provider, not an arbitrary package.
-    npm remains responsible for resolving that package's dependencies.
-    """
     _validate_token(token)
 
     # Reject unsupported providers rather than forming an npm package
@@ -728,10 +730,12 @@ async def connect_github_mcp(token: str) -> dict:
 
 
 async def connect_local_mcp() -> dict:
-    """Attach the bundled diagnostic server to the active principal.
-
-    Neither the executable nor its arguments are user input.
-    """
+    """Attach the bundled diagnostic server to the active principal."""
+    if __import__("os").getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+        return {
+            "success": False,
+            "error": "The bundled local MCP server requires a child process and is disabled in the Vercel serverless deployment.",
+        }
     return await _connect_token_server(
         "local",
         {
