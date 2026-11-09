@@ -67,11 +67,15 @@ def configure_direct_upload(monkeypatch, tmp_path, intent):
         state["intent"] = None
         return {**record, "thread_id": thread_id}
 
+    def delete_intent(*args, **kwargs):
+        state["intent"] = None
+        return True
+
     monkeypatch.setattr(managed_uploads, "get_upload_intent", get_intent)
     monkeypatch.setattr(managed_uploads, "set_upload_intent_final_key", set_final)
     monkeypatch.setattr(managed_uploads, "commit_upload_intent", commit)
     monkeypatch.setattr(managed_uploads, "list_expired_upload_intents", lambda **kwargs: [])
-    monkeypatch.setattr(managed_uploads, "delete_upload_intent", lambda *args, **kwargs: True)
+    monkeypatch.setattr(managed_uploads, "delete_upload_intent", delete_intent)
 
     def head(key):
         state["events"].append(f"head:{key}")
@@ -186,3 +190,61 @@ def test_complete_direct_upload_is_idempotent_after_manifest_commit(monkeypatch,
     result = rag.complete_direct_upload("thread-idempotent", attachment_id)
 
     assert result == committed
+
+
+
+def test_create_direct_upload_returns_short_lived_signed_put(monkeypatch):
+    from contextlib import contextmanager
+
+    import managed_uploads
+
+    monkeypatch.setattr(rag, "PERSISTENCE_BACKEND", "postgres")
+    monkeypatch.setattr(rag, "require_thread", lambda *args, **kwargs: None)
+    monkeypatch.setattr(rag, "_sweep_expired_upload_intents", lambda: None)
+
+    @contextmanager
+    def no_lock(thread_id):
+        yield None
+
+    monkeypatch.setattr(rag, "_upload_lock", no_lock)
+
+    created = {}
+    signed = {}
+
+    def create_intent(thread_id, **kwargs):
+        created.update(kwargs)
+        return {**kwargs, "thread_id": thread_id}
+
+    monkeypatch.setattr(managed_uploads, "create_upload_intent", create_intent)
+    monkeypatch.setattr(
+        object_storage,
+        "presign_put",
+        lambda key, **kwargs: signed.update({"key": key, **kwargs}) or "https://storage.invalid/signed",
+    )
+
+    result = rag.create_direct_upload(
+        "thread-create",
+        "notes.txt",
+        128,
+    )
+
+    assert result["mode"] == "direct"
+    assert result["upload_url"] == "https://storage.invalid/signed"
+    assert result["upload_headers"] == {"Content-Type": "text/plain"}
+    assert created["expected_size"] == 128
+    assert created["kind"] == "document"
+    assert signed["content_type"] == "text/plain"
+    assert signed["expires_in"] == 300
+    assert signed["key"] == created["staging_key"]
+
+
+def test_create_direct_upload_rejects_files_over_ten_mib(monkeypatch):
+    monkeypatch.setattr(rag, "PERSISTENCE_BACKEND", "postgres")
+    monkeypatch.setattr(rag, "_sweep_expired_upload_intents", lambda: None)
+
+    with pytest.raises(UploadError, match="10 MiB"):
+        rag.create_direct_upload(
+            "thread-too-large",
+            "oversized.pdf",
+            10 * 1024 * 1024 + 1,
+        )
