@@ -120,6 +120,30 @@ References:
 - Existing local installation migration is required; a fresh hosted account is not acceptable. Keep original local files and data untouched.
 - Which OAuth/MCP integrations must be available in the first hosted release.
 
+## 9. Local migration inventory baseline (2026-11-09)
+
+Read-only inspection of the existing Windows installation reported:
+
+| Store | Observed state |
+| --- | --- |
+| Authentication | SQLite integrity OK; 2 users, 2 user-identity rows, 1 legacy owner and 1 legacy owner-identity row; 2 sessions; 0 setup tokens |
+| Conversation/history database | SQLite integrity OK; 7 conversations (all active), 30 revisions, 0 orphan revisions; 4 legacy memory records; 1 workspace |
+| LangGraph checkpoint database | SQLite integrity OK; WAL journal mode; 840 checkpoints and 1,023 writes; main DB 79.28 MB, WAL 3.86 MB, SHM 0.03 MB at inspection |
+| Ownership registry | SQLite integrity OK; 96 threads and 11 workspaces; all 107 resources currently assigned; 1 historical claim covering 93 resources; 0 rollbacks |
+| Usage database | SQLite integrity OK; 14 usage rows; 0 active lease rows; 0 connector epochs |
+| MCP credential store | `mcp_credentials.sqlite3` was not found at the configured data path |
+| Main runtime files | `backend/uploads` 11.43 MB; `backend/chroma_db` 2.35 MB; root-level folders and ownership-backup snapshots are separate and are not assumed to be live data |
+
+The auth inventory reports two user accounts; preserve both users, roles, numeric IDs, password hashes and principal identities. Expire imported sessions rather than copying active browser sessions. Do not assume the legacy owner row is a separate account from the admin user row; verify the matching identity mapping before import.
+
+Legacy memory behavior must be preserved: four `long_term_memory` rows have no `memory_details` / `memory_audit` rows, and the current reader applies legacy defaults (`scope=workspace`, `version=0`, `deleted=0`). Do not fabricate historical audit entries.
+
+All 107 ownership resources are assigned, but the single recorded legacy claim covers 93 resources. Before migration sign-off, compare the current ownership registry against `claim_resources`, map each assigned principal to an account role without exposing identifiers, and confirm the 14-resource difference is legitimate. Do not reassign any resource as part of this inspection.
+
+The checkpoint database uses WAL mode. A migration backup must use SQLite's online backup API or a controlled application stop and verified checkpoint. Never copy only the main database file while committed transactions may remain in the WAL. The SHM file is transient coordination state, not an authoritative backup input.
+
+These counts are an observation snapshot, not a hard-coded expected production dataset. Re-run counts and hashes at export and post-import time; require exact reconciliation before cutover.
+
 ## References
 
 - Vercel FastAPI: https://vercel.com/docs/frameworks/backend/fastapi
