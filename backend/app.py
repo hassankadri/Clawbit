@@ -53,12 +53,14 @@ from mcp_oauth import (
 )
 
 from rag import (
+    complete_direct_upload,
+    create_direct_upload,
     delete_attachment,
     get_attachment_records,
     read_attachment_bytes,
     receive_uploaded_file,
 )
-from upload_security import UploadBodyLimitMiddleware, UploadError, validate_thread_id
+from upload_security import MAX_UPLOAD_BYTES, UploadBodyLimitMiddleware, UploadError, validate_thread_id
 from ownership import OwnershipError, bind_resources, require_thread
 from usage_limits import UsageLimitError
 from history_api import router as history_router
@@ -219,6 +221,17 @@ class ChatRequest(
         default="",
         max_length=4000,
     )
+
+
+class UploadStartRequest(BaseModel):
+    thread_id: str = Field(min_length=1, max_length=128)
+    filename: str = Field(min_length=1, max_length=255)
+    size: int = Field(gt=0, le=MAX_UPLOAD_BYTES)
+
+
+class UploadCompleteRequest(BaseModel):
+    thread_id: str = Field(min_length=1, max_length=128)
+    attachment_id: str = Field(min_length=32, max_length=32)
 
 
 class UploadResponse(
@@ -1163,6 +1176,50 @@ async def mcp_disconnect_slack():
 # =========================================================
 # ATTACHMENT UPLOAD
 # =========================================================
+
+@app.post("/attachments/upload/start")
+async def start_attachment_upload(payload: UploadStartRequest) -> dict:
+    require_thread(payload.thread_id, create=True)
+    try:
+        return create_direct_upload(
+            payload.thread_id,
+            payload.filename,
+            payload.size,
+        )
+    except (UploadError, UsageLimitError):
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Private upload storage is unavailable. Please retry.",
+        ) from exc
+
+
+@app.post("/attachments/upload/complete", response_model=UploadResponse)
+async def finish_attachment_upload(payload: UploadCompleteRequest) -> UploadResponse:
+    require_thread(payload.thread_id)
+    try:
+        record = complete_direct_upload(
+            payload.thread_id,
+            payload.attachment_id,
+        )
+    except (UploadError, UsageLimitError):
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="The uploaded file could not be finalized. Please retry.",
+        ) from exc
+
+    return UploadResponse(
+        attachment_id=record["attachment_id"],
+        name=record["name"],
+        mime_type=record["mime_type"],
+        kind=record["kind"],
+        size=record["size"],
+        preview=record.get("preview"),
+    )
+
 
 @app.post(
     "/attachments/upload",
