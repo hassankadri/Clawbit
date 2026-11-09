@@ -353,7 +353,7 @@ def create_direct_upload(
         return {"mode": "multipart"}
 
     from managed_uploads import create_upload_intent, delete_upload_intent
-    from object_storage import delete_object, presign_put
+    from object_storage import presign_put
 
     validate_thread_id(thread_id)
     require_thread(thread_id, create=True)
@@ -552,23 +552,25 @@ def complete_direct_upload(thread_id: str, attachment_id: str) -> dict:
 
         except UploadError:
             # Invalid content must not leave a usable reservation or vectors.
+            # Keep the expired intent if any cleanup operation fails so the
+            # scheduled/on-demand sweeper still knows which object keys to remove.
+            cleanup_complete = True
             try:
                 vectorstore.delete(where=_index_filter(thread_id, attachment_id))
             except Exception:
-                pass
-            try:
-                delete_object(staging_key)
-            except Exception:
-                pass
-            if final_key:
+                cleanup_complete = False
+            for key in (staging_key, final_key):
+                if not key:
+                    continue
                 try:
-                    delete_object(final_key)
+                    delete_object(key)
+                except Exception:
+                    cleanup_complete = False
+            if cleanup_complete:
+                try:
+                    delete_upload_intent(thread_id, attachment_id)
                 except Exception:
                     pass
-            try:
-                delete_upload_intent(thread_id, attachment_id)
-            except Exception:
-                pass
             raise
         except Exception as exc:
             # Transient DB/storage/model failures retain the intent, final object
