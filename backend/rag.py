@@ -89,7 +89,7 @@ def _upload_lock(thread_id: str):
     if PERSISTENCE_BACKEND == "postgres":
         from usage_limits import store as usage_store
 
-        lease = usage_store.acquire_thread(thread_id)
+        lease = usage_store.acquire_upload_thread(thread_id)
         try:
             yield _thread_upload_dir(thread_id, create=True)
         finally:
