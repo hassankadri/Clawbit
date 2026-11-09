@@ -1,6 +1,7 @@
 import base64
 import asyncio
 import json
+import os
 from contextlib import aclosing, asynccontextmanager
 from typing import Literal
 from urllib.parse import urlencode
@@ -14,6 +15,10 @@ from pydantic import BaseModel, Field
 
 import groq
 from google.genai import errors as google_genai_errors
+
+# The strict MsgPack mode must be enabled before importing LangGraph serializers.
+if os.getenv("CLAWBIT_CHECKPOINT_BACKEND", "sqlite").strip().lower() == "postgres":
+    os.environ["LANGGRAPH_STRICT_MSGPACK"] = "true"
 
 from agent import close_agent_resources, get_agent
 from auth import install_authentication
