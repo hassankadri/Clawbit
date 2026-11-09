@@ -617,6 +617,9 @@ export function uploadAttachment(
       ));
       xhr.onabort = () => reject(new Error("Upload canceled."));
       xhr.onload = () => {
+        if (withCredentials) {
+          handleAuthStatus(xhr.status, headers["X-CSRF-Token"] ?? "");
+        }
         if (xhr.status < 200 || xhr.status >= 300) {
           reject(new Error(
             withCredentials
@@ -685,9 +688,6 @@ export function uploadAttachment(
           true,
           handlers.onProgress,
         );
-        // Multipart responses are authenticated API responses; process expiry
-        // in the same way as the previous XMLHttpRequest implementation.
-        handleAuthStatus(200, csrfToken);
         try {
           return JSON.parse(responseText) as AttachmentUploadResponse;
         } catch {
