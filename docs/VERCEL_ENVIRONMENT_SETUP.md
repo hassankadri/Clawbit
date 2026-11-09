@@ -67,6 +67,25 @@ Create one Neon project in Singapore (`aws-ap-southeast-1`) and keep the databas
 
 Create a **private** bucket called `uploads`. Do not set `public_read`. Create a branch-scoped storage credential with both `storage:read` and `storage:write` scopes. The endpoint and storage credentials are branch-specific; do not reuse a Preview branch credential for production.
 
+Clawbit keeps the 10 MiB upload limit without sending file bytes through Vercel Functions. The browser asks the backend for a short-lived, single-object presigned PUT URL, uploads directly to Neon Object Storage, then calls the authenticated completion endpoint. The backend verifies the object size and content type, reads and validates the file, copies it to a new immutable key, indexes it, and commits attachment metadata. The browser never receives Neon access keys or the final object key.
+
+### Configure bucket CORS for the frontend
+
+Set the backend deployment's `CLAWBIT_FRONTEND_URL` to the exact HTTPS frontend origin. From a trusted local terminal, set the matching Neon branch's server-side storage variables and run:
+
+```powershell
+cd D:\My Projects\Clawbit AI\backend
+$env:CLAWBIT_FRONTEND_URL = "https://<frontend-project>.vercel.app"
+$env:AWS_ENDPOINT_URL_S3 = "<Neon Object Storage endpoint>"
+$env:AWS_ACCESS_KEY_ID = "<branch-scoped storage credential ID>"
+$env:AWS_SECRET_ACCESS_KEY = "<branch-scoped storage secret>"
+$env:AWS_REGION = "ap-southeast-1"
+$env:NEON_OBJECT_STORAGE_BUCKET = "uploads"
+python setup_object_storage_cors.py
+```
+
+This installs a bucket CORS rule that permits only that exact frontend origin to use `PUT` and `HEAD`, with the required content-type header. Run the command again for each separate Preview or Production bucket/branch using that branch's own credential and frontend origin. Never make the bucket public.
+
 Use two database URLs:
 
 - `DATABASE_URL`: pooled endpoint used by the deployed application.
