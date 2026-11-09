@@ -1109,7 +1109,7 @@ def mcp_connect_slack(request: Request) -> dict:
     try:
         return start_slack_oauth(
             request.state.auth_session.token_hash,
-            backend_url=str(request.base_url).rstrip("/"),
+            backend_url=_public_oauth_callback_base(request),
             frontend_url=request.headers["origin"],
         )
     except UsageLimitError:
