@@ -275,6 +275,24 @@ SCHEMA_STATEMENTS = (
     """,
     "CREATE INDEX IF NOT EXISTS upload_attachments_thread ON upload_attachments(principal,thread_id,created_at)",
     """
+    CREATE TABLE IF NOT EXISTS upload_intents (
+        attachment_id TEXT NOT NULL,
+        principal TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        staging_key TEXT NOT NULL UNIQUE,
+        final_key TEXT UNIQUE,
+        name TEXT NOT NULL,
+        suffix TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('document','image')),
+        expected_size BIGINT NOT NULL CHECK (expected_size > 0),
+        created_at DOUBLE PRECISION NOT NULL,
+        expires_at DOUBLE PRECISION NOT NULL,
+        PRIMARY KEY (principal,thread_id,attachment_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS upload_intents_expiration ON upload_intents(principal,expires_at)",
+    """
     CREATE TABLE IF NOT EXISTS claims (
         claim_id TEXT PRIMARY KEY,
         principal_id TEXT NOT NULL,
