@@ -419,13 +419,14 @@ def _save_uploaded_file(path: Path, thread_id: str, original_name: str | None):
 
 def read_file_text(file_path: str) -> str:
     if PERSISTENCE_BACKEND == "postgres":
+        from managed_uploads import thread_for_object
         from object_storage import get_bytes
 
+        thread_id = thread_for_object(file_path)
         raw = get_bytes(file_path, max_bytes=MAX_UPLOAD_BYTES)
         suffix = Path(file_path).suffix.lower()
-        temporary = UPLOAD_ROOT / f"read-{uuid4().hex}{suffix}"
-        directory = temporary.parent
-        directory.mkdir(parents=True, exist_ok=True)
+        directory = _thread_upload_dir(thread_id, create=True)
+        temporary = directory / f"read-{uuid4().hex}{suffix}"
         try:
             with safe_open(UPLOAD_ROOT, temporary, "xb") as stream:
                 stream.write(raw)
@@ -711,7 +712,7 @@ def _get_reranker() -> Ranker:
     global _RERANKER
 
     if _RERANKER is None:
-        cache_dir = BACKEND_DIR / "data" / "flashrank"
+        cache_dir = RUNTIME_DIR / "data" / "flashrank"
         cache_dir.mkdir(parents=True, exist_ok=True)
 
         _RERANKER = Ranker(
