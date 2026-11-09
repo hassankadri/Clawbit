@@ -8,7 +8,7 @@ from postgres_db import postgres_connection
 
 def load_manifest(thread_id: str) -> list[dict]:
     principal = current_owner()
-    require_thread(thread_id)
+    require_thread(thread_id, missing_ok=True)
 
     with postgres_connection() as db:
         rows = db.execute(
