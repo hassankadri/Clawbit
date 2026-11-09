@@ -64,7 +64,7 @@ Do not treat Vercel Function `/tmp` as durable storage. It is scratch space only
 ## 5. Safe migration rules
 
 1. Keep the local Windows installation untouched and usable.
-2. Back up each SQLite database and the uploads/Chroma directories before any export.
+2. Back up each SQLite database and the uploads/Chroma directories before any export. For SQLite databases using WAL mode, use SQLite's online backup API (or stop the application and perform a verified checkpoint/backup); never copy only the main `.sqlite`/`.db` file while committed data may remain in `-wal`. Treat `-shm` as transient coordination state, not as a database backup.
 3. Build an idempotent, dry-run-first migration tool; never make deployment startup migrate or reset user data.
 4. Preserve user IDs/principal IDs, thread/workspace ownership, attachment IDs, history revisions, memory versions, and connector epochs.
 5. Do not transfer plaintext secrets through logs, chat, source control, or migration reports.
