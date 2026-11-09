@@ -13,6 +13,18 @@ class FakeS3:
         self.puts = []
         self.deletes = []
         self.gets = []
+        self.presigned = []
+        self.cors = []
+
+    def generate_presigned_url(self, operation, **kwargs):
+        self.presigned.append((operation, kwargs))
+        return "https://storage.example.invalid/signed-upload"
+
+    def put_bucket_cors(self, **kwargs):
+        self.cors.append(kwargs)
+
+    def head_object(self, **kwargs):
+        return {"ContentLength": 15, "ContentType": "application/pdf", "ETag": '"test"'}
 
     def put_object(self, **kwargs):
         kwargs["Body"] = kwargs["Body"].read()
@@ -94,3 +106,74 @@ def test_missing_object_storage_configuration_fails_closed(monkeypatch):
 
     with pytest.raises(object_storage.ObjectStorageConfigurationError):
         object_storage._client()
+
+
+
+def test_presigned_put_is_bound_to_one_object_and_content_type(monkeypatch, tmp_path):
+    client, _ = configure(monkeypatch, tmp_path)
+
+    url = object_storage.presign_put(
+        "pending-uploads/random.pdf",
+        content_type="application/pdf",
+        expires_in=300,
+    )
+
+    assert url.startswith("https://")
+    operation, kwargs = client.presigned[0]
+    assert operation == "put_object"
+    assert kwargs["Params"] == {
+        "Bucket": "clawbit-private",
+        "Key": "pending-uploads/random.pdf",
+        "ContentType": "application/pdf",
+    }
+    assert kwargs["ExpiresIn"] == 300
+    assert kwargs["HttpMethod"] == "PUT"
+
+
+def test_presigned_put_expiry_is_clamped(monkeypatch, tmp_path):
+    client, _ = configure(monkeypatch, tmp_path)
+    object_storage.presign_put(
+        "pending-uploads/key.bin",
+        content_type="application/octet-stream",
+        expires_in=999999,
+    )
+    assert client.presigned[0][1]["ExpiresIn"] == 600
+
+
+def test_head_object_returns_only_bounded_metadata(monkeypatch, tmp_path):
+    client, _ = configure(monkeypatch, tmp_path)
+    info = object_storage.head_object("pending-uploads/key.pdf")
+    assert info == {
+        "size": 15,
+        "content_type": "application/pdf",
+        "etag": '"test"',
+    }
+    assert client.gets == []
+
+
+def test_bucket_cors_allows_only_exact_https_frontend_origin(monkeypatch, tmp_path):
+    client, _ = configure(monkeypatch, tmp_path)
+    object_storage.configure_bucket_cors("https://clawbit.example")
+
+    rule = client.cors[0]["CORSConfiguration"]["CORSRules"][0]
+    assert rule["AllowedOrigins"] == ["https://clawbit.example"]
+    assert rule["AllowedMethods"] == ["PUT", "HEAD"]
+    assert rule["AllowedHeaders"] == ["content-type", "x-amz-*"]
+    assert rule["MaxAgeSeconds"] == 300
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://clawbit.example",
+        "https://clawbit.example/path",
+        "https://clawbit.example?x=1",
+        "https://user:pass@clawbit.example",
+        "*",
+    ],
+)
+def test_bucket_cors_rejects_untrusted_origin(monkeypatch, tmp_path, origin):
+    client, _ = configure(monkeypatch, tmp_path)
+    with pytest.raises(object_storage.ObjectStorageConfigurationError):
+        object_storage.configure_bucket_cors(origin)
+    assert client.cors == []
