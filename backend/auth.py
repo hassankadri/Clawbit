@@ -139,6 +139,21 @@ def auth_database_path() -> Path:
     return root / "data" / "auth.sqlite3"
 
 
+def create_auth_store():
+    """Select durable Postgres for deployed mode, SQLite for local development."""
+    backend = os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower()
+
+    if backend == "postgres":
+        from postgres_auth_store import PostgresAuthStore
+
+        return PostgresAuthStore()
+
+    if backend == "sqlite":
+        return AuthStore(auth_database_path())
+
+    raise ValueError("CLAWBIT_PERSISTENCE_BACKEND must be sqlite or postgres.")
+
+
 def _failure(status: int, message: str) -> JSONResponse:
     category = {
         "Origin is not allowed.": "origin",
@@ -451,7 +466,7 @@ def install_authentication(app: FastAPI) -> None:
     """Install one default-deny boundary for all application routes."""
     settings = AuthSettings.from_environment()
     app.state.auth_settings = settings
-    app.state.auth_store = AuthStore(auth_database_path())
+    app.state.auth_store = create_auth_store()
 
     @app.get("/auth/session")
     async def current_session(request: Request) -> JSONResponse:
