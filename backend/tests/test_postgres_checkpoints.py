@@ -2,8 +2,6 @@
 
 import pytest
 
-from langgraph.checkpoint.base import empty_checkpoint
-
 import owned_postgres_checkpoints as postgres_checkpoints
 from ownership import OwnershipError
 
@@ -57,3 +55,18 @@ def test_postgres_checkpoint_saver_is_the_async_postgres_implementation():
         postgres_checkpoints.OwnedPostgresSaver,
         AsyncPostgresSaver,
     )
+
+
+
+def test_postgres_backend_requires_a_database_url(monkeypatch):
+    import asyncio
+
+    from agent_cache import get_postgres_checkpointer
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    async def run():
+        with pytest.raises(RuntimeError, match="DATABASE_URL is required"):
+            await get_postgres_checkpointer([])
+
+    asyncio.run(run())
