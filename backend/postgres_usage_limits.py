@@ -43,6 +43,7 @@ class PostgresUsageStore:
         self._ready = True
 
     def acquire(self, operation: str) -> str:
+        self.initialize()
         principal = require_active_owner()
         policy = self.policies[operation]
         now = self.clock()
@@ -107,11 +108,13 @@ class PostgresUsageStore:
         return lease
 
     def release(self, lease: str) -> None:
+        self.initialize()
         with postgres_connection() as db:
             db.execute("DELETE FROM leases WHERE id=?", (lease,))
 
     def acquire_thread(self, thread_id: str) -> str:
         """Exclude overlapping checkpoint writers across serverless instances."""
+        self.initialize()
         principal = require_active_owner()
         operation = f"thread:{thread_id}"
         lease = secrets.token_hex(16)
@@ -145,6 +148,7 @@ class PostgresUsageStore:
         expected: int | None = None,
     ) -> int:
         """Persist connector revocation versions independently of function memory."""
+        self.initialize()
         principal = require_active_owner()
 
         with postgres_connection() as db:
