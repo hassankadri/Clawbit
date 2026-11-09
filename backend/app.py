@@ -77,6 +77,13 @@ from observability import RequestLoggingMiddleware, configure_logging, event
 async def lifespan(
     app: FastAPI,
 ):
+    # Vercel may import the module during build. Defer all database network
+    # activity until the deployed function starts serving requests.
+    if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+        import database
+
+        await asyncio.to_thread(database.init_db)
+
     try:
         yield
 
