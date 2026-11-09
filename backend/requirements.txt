@@ -34,3 +34,5 @@ mcp==1.30.0
 defusedxml==0.7.1
 
 cryptography==50.0.2
+
+boto3==1.43.126
