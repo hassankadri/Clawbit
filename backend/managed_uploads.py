@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import time
-import time
-from ownership import current_owner, require_thread
+from ownership import OwnershipError, current_owner, require_thread
 from postgres_db import postgres_connection
 
 
