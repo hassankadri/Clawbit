@@ -666,11 +666,9 @@ export function uploadAttachment(
       if (aborted) throw new DOMException("Upload canceled.", "AbortError");
 
       if (start.mode === "multipart") {
-        let csrfToken = "";
         const headers: Record<string, string> = {};
         try {
           const authenticated = authenticatedHeaders();
-          csrfToken = authenticated["X-CSRF-Token"];
           Object.assign(headers, authenticated);
         } catch (error) {
           throw error;
