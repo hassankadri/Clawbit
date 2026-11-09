@@ -243,6 +243,19 @@ SCHEMA_STATEMENTS = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS pending_approvals_owner_expiry ON pending_approvals(owner, expires_at)",
+    "CREATE EXTENSION IF NOT EXISTS vector",
+    """
+    CREATE TABLE IF NOT EXISTS rag_documents (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        attachment_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        embedding vector(3072) NOT NULL,
+        metadata JSONB NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS rag_documents_owner_thread ON rag_documents(principal,thread_id,attachment_id)",
     """
     CREATE TABLE IF NOT EXISTS claims (
         claim_id TEXT PRIMARY KEY,
