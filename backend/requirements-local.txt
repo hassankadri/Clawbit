@@ -1,0 +1,5 @@
+# Local-development storage adapters only. Not installed in Vercel.
+aiosqlite==0.22.1
+langgraph-checkpoint-sqlite==3.1.2
+langchain-chroma==1.1.0
+chromadb==1.5.9
