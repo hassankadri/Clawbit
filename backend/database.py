@@ -54,6 +54,7 @@ if PERSISTENCE_BACKEND == "postgres":
         max_overflow=0,
         pool_pre_ping=True,
         pool_recycle=240,
+        connect_args={"prepare_threshold": None},
     )
 elif PERSISTENCE_BACKEND == "sqlite":
     DATA_DIR.mkdir(parents=True, exist_ok=True)
