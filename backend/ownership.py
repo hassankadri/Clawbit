@@ -170,7 +170,25 @@ class OwnershipStore:
 # This module can be imported before models/rag load the same absolute .env.
 # Resolve the runtime root consistently, regardless of import order.
 load_dotenv(Path(__file__).resolve().parent / ".env")
-store = OwnershipStore(Path(os.getenv("CLAWBIT_RUNTIME_DIR", Path(__file__).parent)))
+
+
+def _build_ownership_store():
+    backend = os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower()
+
+    if backend == "postgres":
+        from postgres_ownership import PostgresOwnershipStore
+
+        return PostgresOwnershipStore()
+
+    if backend == "sqlite":
+        return OwnershipStore(
+            Path(os.getenv("CLAWBIT_RUNTIME_DIR", Path(__file__).parent))
+        )
+
+    raise ValueError("CLAWBIT_PERSISTENCE_BACKEND must be sqlite or postgres.")
+
+
+store = _build_ownership_store()
 
 
 def require_thread(thread_id: str, *, create: bool = False, missing_ok: bool = False) -> None:
