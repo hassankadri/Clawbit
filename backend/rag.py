@@ -19,7 +19,6 @@ load_dotenv(ENV_PATH)
 os.environ["SSL_CERT_FILE"] = certifi.where()
 os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
-from langchain_chroma import Chroma
 from models import FreeGoogleEmbeddings
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -38,21 +37,34 @@ from evidence import document_source, evidence_note, register_sources
 
 BACKEND_DIR = Path(__file__).resolve().parent
 
+PERSISTENCE_BACKEND = os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower()
 RUNTIME_DIR = Path(os.environ.get("CLAWBIT_RUNTIME_DIR", BACKEND_DIR))
 UPLOAD_ROOT = RUNTIME_DIR / "uploads"
 CHROMA_ROOT = RUNTIME_DIR / "chroma_db"
 
-UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-CHROMA_ROOT.mkdir(parents=True, exist_ok=True)
+# Local development retains filesystem uploads and embedded Chroma. In deployed
+# mode, uploaded bytes and manifests are moved to managed object/database stores.
+if PERSISTENCE_BACKEND == "sqlite":
+    UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+    CHROMA_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Embeddings model
 embeddings = FreeGoogleEmbeddings(model="gemini-embedding-001")
 
-vectorstore = Chroma(
-    collection_name="agentic_chatbot_docs",
-    embedding_function=embeddings,
-    persist_directory=str(CHROMA_ROOT)
-)
+if PERSISTENCE_BACKEND == "postgres":
+    from postgres_vectorstore import PostgresVectorStore
+
+    vectorstore = PostgresVectorStore(embedding_function=embeddings)
+elif PERSISTENCE_BACKEND == "sqlite":
+    from langchain_chroma import Chroma
+
+    vectorstore = Chroma(
+        collection_name="agentic_chatbot_docs",
+        embedding_function=embeddings,
+        persist_directory=str(CHROMA_ROOT),
+    )
+else:
+    raise RuntimeError("CLAWBIT_PERSISTENCE_BACKEND must be sqlite or postgres.")
 
 RAG_CACHE_TTL_SECONDS = 300
 RAG_CACHE_MAX_ENTRIES = 128
