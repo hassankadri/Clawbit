@@ -160,7 +160,7 @@ def test_similarity_search_adds_principal_and_thread_filters(monkeypatch):
 
 def test_get_and_delete_are_principal_scoped(monkeypatch):
     connection = FakeConnection([
-        HybridRow({"id": "chunk-1", "metadata": json.dumps({
+        HybridRow({"id": "chunk-1", "thread_id": "thread-1", "metadata": json.dumps({
             "thread_id": "thread-1", "attachment_id": "file-1",
         })})
     ])
