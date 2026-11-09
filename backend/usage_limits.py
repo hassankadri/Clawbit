@@ -255,10 +255,15 @@ class UsageStore:
             return generation
 
 
-store = UsageStore(
-    Path(os.getenv("CLAWBIT_RUNTIME_DIR", Path(__file__).resolve().parent))
-    / "data" / "usage.sqlite3"
-)
+if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+    from postgres_usage_limits import PostgresUsageStore
+
+    store = PostgresUsageStore()
+else:
+    store = UsageStore(
+        Path(os.getenv("CLAWBIT_RUNTIME_DIR", Path(__file__).resolve().parent))
+        / "data" / "usage.sqlite3"
+    )
 _active: ContextVar[frozenset[tuple[str, str]]] = ContextVar("active_usage", default=frozenset())
 
 
