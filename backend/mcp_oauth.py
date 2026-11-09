@@ -272,19 +272,37 @@ def _save_token(
 def get_oauth_token_record(provider: str) -> dict | None:
     with _store_lock:
         key = _key(provider)
-        record = _oauth_tokens.get(key)
-        if record is None:
+
+        # In serverless mode, another function instance may refresh and rotate
+        # OAuth tokens. Treat Neon as authoritative rather than trusting a warm
+        # process cache that may contain an older access or refresh token.
+        if _postgres_enabled():
             try:
                 recovered = load_record(provider)
             except CredentialStoreError:
                 recovered = None
 
             if recovered and recovered["kind"] == "oauth":
-                restored = dict(recovered["value"])
-                restored["connection_epoch"] = recovered["epoch"]
+                record = dict(recovered["value"])
+                record["connection_epoch"] = recovered["epoch"]
+                _oauth_tokens[key] = record
+            else:
+                _oauth_tokens.pop(key, None)
+                return None
+        else:
+            record = _oauth_tokens.get(key)
+            if record is None:
+                try:
+                    recovered = load_record(provider)
+                except CredentialStoreError:
+                    recovered = None
 
-                _oauth_tokens[key] = restored
-                record = restored
+                if recovered and recovered["kind"] == "oauth":
+                    restored = dict(recovered["value"])
+                    restored["connection_epoch"] = recovered["epoch"]
+                    _oauth_tokens[key] = restored
+                    record = restored
+
         if record and record["connection_epoch"] != usage_limits.store.connector_epoch(provider):
             _oauth_tokens.pop(key, None)
             _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
@@ -413,8 +431,73 @@ async def complete_slack_oauth(
     return {"frontend_url": record["frontend_url"], "success": True, "provider": "slack"}
 
 
+async def _get_google_drive_access_token_postgres() -> str | None:
+    """Refresh from Neon under a distributed lease shared by all Vercel instances."""
+    deadline = time.monotonic() + 20.0
+
+    while True:
+        record = get_oauth_token_record("google-drive")
+        if not record:
+            return None
+
+        expires = record.get("expires_at")
+        if expires is None or time.time() < expires - TOKEN_EXPIRY_SKEW_SECONDS:
+            return record["access_token"]
+
+        lease = usage_limits.store.acquire_connector_refresh("google-drive")
+        if lease is None:
+            if time.monotonic() >= deadline:
+                raise RuntimeError(OAUTH_ERROR)
+            await asyncio.sleep(0.2)
+            continue
+
+        try:
+            # Reload after acquiring the lease: the previous holder may have
+            # refreshed immediately before this function acquired it.
+            record = get_oauth_token_record("google-drive")
+            if not record:
+                return None
+
+            expires = record.get("expires_at")
+            if expires is None or time.time() < expires - TOKEN_EXPIRY_SKEW_SECONDS:
+                return record["access_token"]
+
+            refresh_token = record.get("refresh_token")
+            if not refresh_token:
+                raise RuntimeError(OAUTH_ERROR)
+
+            payload = await _post_form(GOOGLE_TOKEN_URL, {
+                "client_id": _require_env("GOOGLE_MCP_CLIENT_ID"),
+                "client_secret": _require_env("GOOGLE_MCP_CLIENT_SECRET"),
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            })
+            payload["refresh_token"] = payload.get("refresh_token") or refresh_token
+            _save_token(
+                "google-drive",
+                payload,
+                expected_epoch=record["connection_epoch"],
+                refreshing=True,
+            )
+            return payload["access_token"]
+        except Exception:
+            # Only invalidate when this refresh still owns the active connector
+            # epoch. A concurrent disconnect/reconnect must always win.
+            try:
+                if usage_limits.store.connector_epoch("google-drive") == record["connection_epoch"]:
+                    disconnect_oauth_provider("google-drive")
+            except Exception:
+                pass
+            raise RuntimeError(OAUTH_ERROR) from None
+        finally:
+            usage_limits.store.release(lease)
+
+
 @limited("mcp")
 async def get_google_drive_access_token() -> str | None:
+    if _postgres_enabled():
+        return await _get_google_drive_access_token_postgres()
+
     key = _key("google-drive")
     with _store_lock:
         lock = _refresh_locks.setdefault(key, Lock())
