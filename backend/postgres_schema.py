@@ -205,6 +205,45 @@ SCHEMA_STATEMENTS = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS credentials (
+        principal TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        epoch BIGINT NOT NULL,
+        ciphertext BYTEA NOT NULL,
+        PRIMARY KEY (principal, provider)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS oauth_states (
+        state TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        version BIGINT NOT NULL,
+        redirect_uri TEXT NOT NULL,
+        connection_epoch BIGINT NOT NULL,
+        verifier TEXT NOT NULL,
+        created_at DOUBLE PRECISION NOT NULL,
+        expires_at DOUBLE PRECISION NOT NULL,
+        frontend_url TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS oauth_states_owner_expiry ON oauth_states(principal, expires_at)",
+    """
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+        id TEXT PRIMARY KEY,
+        owner TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        arguments TEXT NOT NULL,
+        created_at DOUBLE PRECISION NOT NULL,
+        expires_at DOUBLE PRECISION NOT NULL,
+        decision BOOLEAN,
+        decided_at DOUBLE PRECISION
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS pending_approvals_owner_expiry ON pending_approvals(owner, expires_at)",
+    """
     CREATE TABLE IF NOT EXISTS claims (
         claim_id TEXT PRIMARY KEY,
         principal_id TEXT NOT NULL,
