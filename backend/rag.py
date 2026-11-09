@@ -166,11 +166,23 @@ def _attachment_path(file_path: str, thread_id: str | None = None) -> Path:
 
 def read_attachment_bytes(record: dict) -> bytes:
     if PERSISTENCE_BACKEND == "postgres":
-        if record.get("kind") != "image" or not record.get("object_key"):
+        thread_id = record.get("thread_id")
+        attachment_id = record.get("attachment_id")
+        object_key = record.get("object_key")
+        if (
+            record.get("kind") != "image"
+            or not isinstance(thread_id, str)
+            or not isinstance(attachment_id, str)
+            or not isinstance(object_key, str)
+        ):
             raise UploadError("Expected an image attachment.")
+        require_thread(thread_id)
+        authorized = get_attachment_records(thread_id, [attachment_id])[0]
+        if authorized.get("object_key") != object_key:
+            raise OwnershipError()
         from object_storage import get_bytes
 
-        return get_bytes(record["object_key"], max_bytes=MAX_UPLOAD_BYTES)
+        return get_bytes(object_key, max_bytes=MAX_UPLOAD_BYTES)
 
     path = _attachment_path(record["path"])
     kind, _ = validate_file(UPLOAD_ROOT, path)
