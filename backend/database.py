@@ -27,24 +27,43 @@ def _utc_now_naive() -> datetime:
 
 
 BACKEND_DIR = Path(__file__).resolve().parent
+PERSISTENCE_BACKEND = os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower()
 DATA_DIR = Path(os.environ.get("CLAWBIT_RUNTIME_DIR", BACKEND_DIR)) / "data"
-DATA_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
-
 DATABASE_PATH = DATA_DIR / "chatbot_memory.db"
 
-DATABASE_URL = (
-    f"sqlite:///{DATABASE_PATH.as_posix()}"
-)
+if PERSISTENCE_BACKEND == "postgres":
+    raw_database_url = os.getenv("DATABASE_URL", "").strip()
+    if not raw_database_url:
+        raise RuntimeError("DATABASE_URL is required for PostgreSQL persistence.")
+    if raw_database_url.startswith("postgresql://"):
+        DATABASE_URL = raw_database_url.replace(
+            "postgresql://", "postgresql+psycopg://", 1
+        )
+    elif raw_database_url.startswith("postgres://"):
+        DATABASE_URL = raw_database_url.replace(
+            "postgres://", "postgresql+psycopg://", 1
+        )
+    elif raw_database_url.startswith("postgresql+psycopg://"):
+        DATABASE_URL = raw_database_url
+    else:
+        raise RuntimeError("DATABASE_URL must be a PostgreSQL URL.")
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={
-        "check_same_thread": False,
-    },
-)
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=1,
+        max_overflow=0,
+        pool_pre_ping=True,
+        pool_recycle=240,
+    )
+elif PERSISTENCE_BACKEND == "sqlite":
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    DATABASE_URL = f"sqlite:///{DATABASE_PATH.as_posix()}"
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+    )
+else:
+    raise RuntimeError("CLAWBIT_PERSISTENCE_BACKEND must be sqlite or postgres.")
 
 SessionLocal = sessionmaker(
     bind=engine,
@@ -258,10 +277,20 @@ def _migrate_workspace_columns():
 
 
 def init_db():
-    Base.metadata.create_all(
-        bind=engine
-    )
+    if PERSISTENCE_BACKEND == "postgres":
+        required_tables = {
+            "workspaces", "conversations", "chat_messages", "long_term_memory"
+        }
+        available = set(inspect(engine).get_table_names())
+        missing = sorted(required_tables - available)
+        if missing:
+            raise RuntimeError(
+                "Neon compatibility schema is incomplete. "
+                "Run setup_postgres_schema.py before starting Clawbit."
+            )
+        return
 
+    Base.metadata.create_all(bind=engine)
     _migrate_workspace_columns()
 
 
