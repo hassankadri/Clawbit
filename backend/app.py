@@ -994,6 +994,26 @@ async def mcp_disconnect_stripe():
 # GOOGLE DRIVE MCP
 # =========================================================
 
+def _public_oauth_callback_base(request: Request) -> str:
+    """Use the frontend origin for production OAuth callbacks.
+
+    The browser session cookie is host-only (__Host-). Redirecting an OAuth
+    provider to the separate backend Vercel hostname would lose that cookie.
+    The frontend /api rewrite forwards this callback to FastAPI instead.
+    """
+    settings = request.app.state.auth_settings
+    if not settings.secure:
+        return str(request.base_url).rstrip("/")
+
+    origin = request.headers.get("origin", "").rstrip("/")
+    if not origin or origin not in settings.origins:
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth callback origin is not configured.",
+        )
+    return f"{origin}/api"
+
+
 async def _complete_connector_oauth(
     request: Request,
     provider: str,
@@ -1041,7 +1061,7 @@ def mcp_connect_google_drive(request: Request) -> dict:
     try:
         return start_google_drive_oauth(
             request.state.auth_session.token_hash,
-            backend_url=str(request.base_url).rstrip("/"),
+            backend_url=_public_oauth_callback_base(request),
             frontend_url=request.headers["origin"],
         )
     except UsageLimitError:
