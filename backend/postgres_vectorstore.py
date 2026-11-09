@@ -65,8 +65,24 @@ class PostgresVectorStore:
 
     def __init__(self, embedding_function: Any):
         self.embedding_function = embedding_function
+        self._schema_ready = False
+
+    def _ensure_schema(self) -> None:
+        if self._schema_ready:
+            return
+        with postgres_connection() as db:
+            row = db.execute(
+                "SELECT to_regclass('public.rag_documents') AS table_name"
+            ).fetchone()
+        if row["table_name"] is None:
+            raise RuntimeError(
+                "Neon vector schema is incomplete. "
+                "Run setup_postgres_schema.py before starting Clawbit."
+            )
+        self._schema_ready = True
 
     def add_documents(self, documents: list[Document], ids: list[str] | None = None):
+        self._ensure_schema()
         if not documents:
             return []
         if ids is None or len(ids) != len(documents) or len(set(ids)) != len(ids):
@@ -114,6 +130,7 @@ class PostgresVectorStore:
         include: list[str] | None = None,
         ids: list[str] | None = None,
     ) -> dict[str, Any]:
+        self._ensure_schema()
         principal = current_owner()
         where_sql, where_params, _ = _compile_where(where)
         clauses = ["principal = ?", where_sql]
@@ -160,6 +177,7 @@ class PostgresVectorStore:
         where: dict[str, Any] | None = None,
         ids: list[str] | None = None,
     ) -> None:
+        self._ensure_schema()
         if not where and not ids:
             raise OwnershipError()
 
@@ -198,6 +216,7 @@ class PostgresVectorStore:
         k: int = 4,
         filter: dict[str, Any] | None = None,
     ) -> list[Document]:
+        self._ensure_schema()
         if not filter:
             raise OwnershipError()
 
