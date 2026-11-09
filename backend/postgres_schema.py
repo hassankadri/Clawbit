@@ -114,13 +114,13 @@ SCHEMA_STATEMENTS = (
         workspace_id TEXT NOT NULL,
         display_id TEXT NOT NULL,
         title TEXT NOT NULL,
-        pinned SMALLINT NOT NULL DEFAULT 0,
+        pinned BOOLEAN NOT NULL DEFAULT FALSE,
         model TEXT NOT NULL,
         mode TEXT NOT NULL,
         created_at BIGINT NOT NULL,
         updated_at BIGINT NOT NULL,
         version BIGINT NOT NULL DEFAULT 0,
-        deleted SMALLINT NOT NULL DEFAULT 0,
+        deleted BOOLEAN NOT NULL DEFAULT FALSE,
         active_revision TEXT
     )
     """,
