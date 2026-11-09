@@ -165,6 +165,13 @@ def _attachment_path(file_path: str, thread_id: str | None = None) -> Path:
 
 
 def read_attachment_bytes(record: dict) -> bytes:
+    if PERSISTENCE_BACKEND == "postgres":
+        if record.get("kind") != "image" or not record.get("object_key"):
+            raise UploadError("Expected an image attachment.")
+        from object_storage import get_bytes
+
+        return get_bytes(record["object_key"], max_bytes=MAX_UPLOAD_BYTES)
+
     path = _attachment_path(record["path"])
     kind, _ = validate_file(UPLOAD_ROOT, path)
     if kind != "image":
@@ -176,6 +183,15 @@ def read_source_bytes(thread_id: str, attachment_id: str) -> bytes:
     """Read an owned citation document through the same upload path guards."""
     require_thread(thread_id)
     record = get_attachment_records(thread_id, [attachment_id])[0]
+    if PERSISTENCE_BACKEND == "postgres":
+        if record.get("kind") != "document" or not record.get("object_key"):
+            raise UploadError("Expected a document source.")
+        from object_storage import get_bytes
+
+        try:
+            return get_bytes(record["object_key"], max_bytes=MAX_UPLOAD_BYTES)
+        except Exception as exc:
+            raise UploadError("Source is unavailable. It may have been removed.") from exc
     path = _attachment_path(record["path"], thread_id)
     try:
         kind, _ = validate_file(UPLOAD_ROOT, path)
@@ -192,14 +208,16 @@ def _preview_text(text: str, limit: int = 5000) -> str:
 
 
 def get_attachment_records(thread_id: str, attachment_ids: list[str] | None = None) -> list[dict]:
+    require_thread(thread_id)
     manifest = _load_manifest(thread_id)
 
     attachment_id_set = set(attachment_ids or [])
     records = [item for item in manifest if not attachment_ids or item.get("attachment_id") in attachment_id_set]
     if attachment_ids and {item.get("attachment_id") for item in records} != attachment_id_set:
         raise OwnershipError()
-    for record in records:
-        _attachment_path(record.get("path", ""), thread_id)
+    if PERSISTENCE_BACKEND != "postgres":
+        for record in records:
+            _attachment_path(record.get("path", ""), thread_id)
     return records
 
 
@@ -370,6 +388,21 @@ def _save_uploaded_file(path: Path, thread_id: str, original_name: str | None):
 
 
 def read_file_text(file_path: str) -> str:
+    if PERSISTENCE_BACKEND == "postgres":
+        from object_storage import get_bytes
+
+        raw = get_bytes(file_path, max_bytes=MAX_UPLOAD_BYTES)
+        suffix = Path(file_path).suffix.lower()
+        temporary = UPLOAD_ROOT / f"read-{uuid4().hex}{suffix}"
+        directory = temporary.parent
+        directory.mkdir(parents=True, exist_ok=True)
+        try:
+            with safe_open(UPLOAD_ROOT, temporary, "xb") as stream:
+                stream.write(raw)
+            return "\n".join(text for _, text in _extract_pages(temporary))
+        finally:
+            _remove_file(temporary)
+
     path = _attachment_path(file_path)
     validate_file(UPLOAD_ROOT, path)
     return "\n".join(text for _, text in _extract_pages(path))
