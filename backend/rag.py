@@ -286,8 +286,9 @@ async def receive_uploaded_file(upload, thread_id: str):
         try:
             with safe_open(UPLOAD_ROOT, path, "xb") as stream:
                 created = True
-                _write_json(journal, {"operation": "upload", "attachment_id": path.stem,
-                                      "path": str(path), "indexed": False})
+                if PERSISTENCE_BACKEND != "postgres":
+                    _write_json(journal, {"operation": "upload", "attachment_id": path.stem,
+                                          "path": str(path), "indexed": False})
                 size = 0
                 while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
                     size += len(chunk)
@@ -297,7 +298,9 @@ async def receive_uploaded_file(upload, thread_id: str):
             return _save_uploaded_file(path, thread_id, upload.filename)
         except BaseException:
             if created:
-                if journal.exists():
+                if PERSISTENCE_BACKEND == "postgres":
+                    _remove_file(path)
+                elif journal.exists():
                     _recover_pending(thread_id)
                 elif not any(item.get("attachment_id") == path.stem for item in _load_manifest(thread_id)):
                     # Cleanup itself may have removed the journal before raising.
@@ -562,13 +565,13 @@ def delete_attachment(thread_id: str, attachment_id: str) -> bool:
             from managed_uploads import delete_attachment_record
             from object_storage import delete_object
 
+            # Keep the manifest until every external object/vector deletion
+            # succeeds. A failed deletion can then be retried by the owner.
+            vectorstore.delete(where=_index_filter(thread_id, attachment_id))
+            delete_object(record["object_key"])
             deleted = delete_attachment_record(thread_id, attachment_id)
             if not deleted:
                 return False
-            try:
-                vectorstore.delete(where=_index_filter(thread_id, attachment_id))
-            finally:
-                delete_object(deleted["object_key"])
             _RAG_CACHE.clear()
             return True
 
