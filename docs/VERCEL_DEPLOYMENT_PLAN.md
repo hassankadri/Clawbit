@@ -22,16 +22,25 @@ Use the frontend origin for:
 
 Validate the forwarded scheme/host behavior in a Vercel Preview before allowing production authentication. Do not assume the local `production_server.py` proxy allowlist is the correct Vercel configuration.
 
-## 2. Proposed managed storage
+## 2. Confirmed $0/month target architecture (within free quotas)
 
-Prefer a small number of managed services:
+The user's constraint is **no paid hosting plan and no monthly infrastructure bill**. Use the free tiers below and configure usage alerts/limits. Zero cost is conditional on staying within included quotas; providers can require account verification/payment setup, and overages or optional paid features must not be enabled.
 
-- **Neon Postgres:** transactional application data, accounts/sessions, usage limits, connector state, conversation history, memory, and LangGraph checkpoints.
-- **Neon pgvector:** replace the embedded Chroma collection, subject to a retrieval/evaluation comparison and an explicit embedding-dimension decision.
-- **Neon Object Storage (private S3-compatible buckets; preferred candidate):** uploaded document/image bytes. Neon currently lists 5 GB object storage per Free project, with branch-aware objects. Keep attachment metadata, ownership, status and manifests in Postgres; use private buckets and backend-authorized access. Validate region availability, access signing, and migration volume before locking this choice. Vercel Blob remains a fallback (Hobby currently includes 1 GB storage/month and 10 GB transfer/month).
-- **No Redis initially:** use Postgres transactions and short-lived rows for coordination where reasonable. Add Redis only if measured contention or polling makes it necessary.
+| Layer | Service | Intended role | Free-tier constraint |
+| --- | --- | --- | --- |
+| Frontend | Vercel Hobby | Next.js UI and same-origin API proxy | Personal/non-commercial use only; included monthly quotas apply |
+| Backend | Vercel Hobby Python runtime | FastAPI application as a serverless function | Python runtime is beta; 500 MB uncompressed bundle limit; 2 GB / 1 vCPU on Hobby; Fluid Compute up to 300 seconds; proxied rewrites have a separate 120-second timeout |
+| Transactional database | Neon Free Postgres | Auth, users/principals, ownership, history, memory, usage/quotas, connector records, OAuth/approval state and checkpoints | Current Free plan has finite compute/storage quotas; budget queries/connections and monitor usage |
+| Vector database | Neon Postgres + pgvector | Replace local Chroma | Same Neon database/storage/compute quota; validate embedding dimension and retrieval quality |
+| Private file storage | Cloudflare R2 Standard | Original uploaded bytes | 10 GB-month storage, 1 million Class A and 10 million Class B operations/month; no egress fees within current free tier |
 
-Do not treat Vercel Function `/tmp` as durable storage. It is scratch space only.
+**No extra paid backend host, Redis, Vercel Blob, or Vercel Postgres add-on.** R2 API access uses its S3-compatible endpoint and a bucket-scoped token stored only as Vercel environment variables. Bucket access must remain private; the browser must never receive account-wide R2 credentials. Upload metadata/manifests and ownership stay in Postgres.
+
+Vercel supports FastAPI entrypoints (app.py is a recognized entrypoint) and Python streaming. The actual backend bundle must be measured; remove local Chroma/SQLite dependencies and test the full app import before deployment. Python packages are not tree-shaken, and the function must fit within 500 MB uncompressed.
+
+**Timeout behavior:** the Vercel Hobby function can run up to 300 seconds with Fluid Compute, but an external rewrite is capped at 120 seconds. Keep browser-proxied chat operations comfortably below 120 seconds. If an agent workflow can run longer, implement durable job records and polling/resume rather than holding a proxy request open. SSE needs a Preview end-to-end test.
+
+Do not treat Vercel Function /tmp as durable storage. It is scratch space only. No local SQLite, filesystem upload, or embedded Chroma data may be used as authoritative state in production.
 
 ## 3. Current persistence inventory
 
@@ -79,9 +88,9 @@ The user explicitly authorized permanent deletion of the existing runtime data a
 
 1. Add deployment-specific configuration and health/readiness checks without changing storage.
 2. Add Postgres schema/migrations and adapters, beginning with auth, history, memory and usage.
-3. Move LangGraph checkpoints to Postgres and retain ownership enforcement.
-4. Move uploads to private Blob and Chroma to pgvector; compare retrieval/evaluation results.
-5. Move OAuth/approval state to shared storage and resolve MCP stdio execution.
+3. Move LangGraph checkpoints to Postgres using the official Postgres checkpoint saver and retain ownership enforcement.
+4. Move upload bytes to private Cloudflare R2 and metadata/manifests to Postgres; replace Chroma with pgvector and compare retrieval/evaluation results.
+5. Persist OAuth/approval state in Postgres and remove or isolate unsupported MCP stdio/npx child-process connectors from the Vercel Function.
 6. Add Vercel project configuration, same-origin API rewrite, security headers and environment documentation.
 7. Deploy Preview, run automated tests, and verify login, chat SSE, upload, retrieval, delete, OAuth and MCP flows.
 8. Start with empty managed storage and verify new identity/resource IDs. No legacy-data migration.
@@ -119,8 +128,8 @@ References:
 
 ## 8. Open decisions before the first live Preview
 
-- **Vercel plan confirmed: Hobby (Free).** Treat the hosted app as a personal/non-commercial deployment; upgrade before commercial use.
-- Confirm the storage provider/region and align the Vercel Function region with the database/object-store region. Neon lists Singapore (`ap-southeast-1`) as an available region; Vercel supports `sin1`. Validate current account availability before setting it.
+- **Vercel Hobby (Free) confirmed.** This deployment must remain personal/non-commercial. No paid services or automatic overages.
+- Choose one Neon region and place Vercel Functions nearby where Hobby allows it; verify account-available regions before provisioning. Use Cloudflare R2 Standard private bucket for uploads.
 - **Full reset authorized:** permanently erase the existing local runtime data and provision a brand-new hosted installation with new identities and IDs.
 - Which OAuth/MCP integrations must be available in the first hosted release.
 
@@ -186,6 +195,23 @@ The local inspection baseline is retained only as a record of what the reset rem
 After the user runs the one-time Windows cleanup, confirm these paths are absent/empty before starting the local app. The application may then recreate empty runtime stores and generate new IDs. The hosted Preview must independently start with empty managed services and a separately generated administrator identity.
 
 Do not delete any code, project configuration, Git history, virtual environment, node_modules, frontend build output, or `.env` as part of the data reset. Do not add any automatic reset command to deploy/build/startup.
+
+## 12. $0/month implementation gates
+
+The following work is mandatory before a usable Preview; the Next.js rewrite change alone does not make the app deployable.
+
+1. Introduce a Postgres data layer and migrations for auth/users/sessions, ownership, history/revisions, memories, usage budgets, connector epochs, OAuth state, pending approvals and app metadata. Preserve account isolation; create a new cloud admin through the existing first-time setup flow. Store session hashes only.
+2. Replace SQLite checkpoint persistence with **langgraph-checkpoint-postgres** / **AsyncPostgresSaver**; run setup/migrations as a controlled one-time admin operation, not on every function invocation.
+3. Replace Chroma with pgvector. Confirm the selected embedding model's actual output dimension, add an appropriate index strategy (or begin with exact search), persist per-thread/per-principal metadata filters, and validate cross-user isolation.
+4. Replace local upload files/manifests with private R2 object bytes plus Postgres metadata. Generate unpredictable object keys; authorize every read, write and delete in the backend. Prefer short-lived presigned operations only after owner authorization.
+5. Replace process-only OAuth state and pending MCP approvals with Postgres records that enforce TTL, one-time consumption, session binding and owner/principal binding.
+6. Remove production reliance on local data/, uploads/, chroma_db/, FlashRank writable cache, process PID leases, and process-only mutable connector state. Caches may be disposable only.
+7. Resolve Notion/Stripe stdio npx connectors. Vercel Python functions must not rely on spawned local MCP processes or npm availability; use supported remote HTTP MCP endpoints or mark unsupported connectors unavailable in the first release.
+8. Reduce runtime dependencies and test bundle size under 500 MB. Remove chromadb, langchain-chroma, langgraph-checkpoint-sqlite, aiosqlite if no remaining runtime path needs them. Add a supported Postgres driver/checkpointer and S3 SDK with pinned versions.
+9. Add a durable async-job path for workflows that may exceed the 120-second external-rewrite timeout. Keep proxied SSE responses bounded; test browser aborts, client reconnects and function timeouts.
+10. Deploy only after backend unit/integration tests pass against a clean Neon branch and an isolated private R2 bucket. Verify startup/login, user isolation, history, checkpoints, new uploads, RAG indexing/retrieval/deletion, OAuth state and cold-start durability.
+
+**Free quota facts checked 2026-11-09:** Vercel Hobby includes 1 million Function invocations, 100 GB-hours Function Duration, 4 CPU-hours and 360 GB-hours provisioned memory/month; Hobby is personal/non-commercial only. Neon Free quotas are finite and can change; verify the account's live quota in its dashboard before provisioning. Cloudflare R2 Standard includes 10 GB-month storage, 1 million Class A and 10 million Class B operations/month, with free egress. Set usage alerts and do not add paid add-ons.
 
 ## References
 
