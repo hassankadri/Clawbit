@@ -78,6 +78,22 @@ class HistoryStore:
         with self._lock:
             if self._initialized:
                 return
+            if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+                from postgres_db import postgres_connection
+
+                with postgres_connection() as db:
+                    row = db.execute("""
+                        SELECT
+                            to_regclass('public.history_conversations') AS conversations_table,
+                            to_regclass('public.history_revisions') AS revisions_table
+                    """).fetchone()
+                if row["conversations_table"] is None or row["revisions_table"] is None:
+                    raise RuntimeError(
+                        "Neon history schema is incomplete. "
+                        "Run setup_postgres_schema.py before starting Clawbit."
+                    )
+                self._initialized = True
+                return
             self.path.parent.mkdir(parents=True, exist_ok=True)
             existed = self.path.exists()
             with closing(sqlite3.connect(self.path, timeout=30)) as db:
@@ -140,8 +156,15 @@ class HistoryStore:
             self._initialized = True
 
     @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
+    def connection(self):
         self.initialize()
+        if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+            from postgres_db import postgres_connection
+
+            with postgres_connection() as db:
+                yield db
+            return
+
         with closing(sqlite3.connect(self.path, timeout=30)) as db:
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA foreign_keys=ON")
@@ -206,15 +229,24 @@ class HistoryStore:
     def list_conversations(self) -> list[dict]:
         owned = set(ownership.store.owned_ids("thread"))
         with self.connection() as db:
-            # One ordered query, no per-conversation message queries.
-            rows = db.execute("""SELECT c.*, CASE WHEN json_valid(r.messages)
-                THEN substr(json_extract(r.messages, '$[#-1].content'), 1, 200) ELSE '' END AS preview
-                FROM history_conversations c LEFT JOIN history_revisions r ON r.id=c.active_revision
-                WHERE c.deleted=0 ORDER BY c.pinned DESC, c.updated_at DESC, c.thread_id""")
-            return [
-                self._view(db, row, messages=False)
-                for row in rows if row["thread_id"] in owned
-            ]
+            # Fetch active message payloads in one query and derive previews in Python.
+            # This is portable between SQLite and PostgreSQL JSON representations.
+            rows = db.execute("""
+                SELECT c.*, r.messages AS active_messages
+                FROM history_conversations c
+                LEFT JOIN history_revisions r ON r.id=c.active_revision
+                WHERE c.deleted=0
+                ORDER BY c.pinned DESC, c.updated_at DESC, c.thread_id
+            """)
+            result = []
+            for row in rows:
+                if row["thread_id"] not in owned:
+                    continue
+                item = dict(row)
+                messages = self._decode_messages(item.get("active_messages"))
+                item["preview"] = messages[-1]["content"][:200] if messages else ""
+                result.append(self._view(db, item, messages=False))
+            return result
 
     def deleted_threads(self) -> list[str]:
         owned = set(ownership.store.owned_ids("thread"))
@@ -449,8 +481,11 @@ class HistoryStore:
             ).fetchone()
             return dict(receipt), False
 
-    def _has_legacy_payload(self, db: sqlite3.Connection, thread_id: str) -> bool:
+    def _has_legacy_payload(self, db, thread_id: str) -> bool:
         """Do not replace an owned legacy checkpoint merely because its UI is empty."""
+        if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+            # A fresh hosted database has no legacy SQLite or Chroma payload.
+            return False
         tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "chat_messages" in tables and db.execute(
             "SELECT 1 FROM chat_messages WHERE thread_id=? LIMIT 1", (thread_id,)
