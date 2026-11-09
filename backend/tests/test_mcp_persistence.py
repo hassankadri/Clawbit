@@ -246,7 +246,7 @@ def test_postgres_oauth_reads_fresh_token_from_shared_store(monkeypatch):
             "connection_epoch": 7,
         }
     })
-    monkeypatch.setattr(vault, "load_record", lambda provider: {
+    monkeypatch.setattr(oauth, "load_record", lambda provider: {
         "kind": "oauth",
         "value": {
             "access_token": "fresh-access-token",
