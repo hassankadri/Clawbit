@@ -5,7 +5,8 @@
   ],
   "functions": {
     "app.py": {
-      "maxDuration": 110
+      "maxDuration": 110,
+      "excludeFiles": "{tests/**,__pycache__/**,**/*.pyc,data/**,uploads/**,chroma_db/**,evaluation-results/**,docs/**,*.sqlite,*.sqlite3,*.sqlite3-*,*.sqlite-*,requirements-dev.txt,requirements-local.txt,requirements-lock.txt,*.md,*.zip,.env,.env.*}"
     }
   }
 }
