@@ -140,6 +140,34 @@ class PostgresUsageStore:
 
         return lease
 
+    def acquire_upload_thread(self, thread_id: str) -> str:
+        """Serialize upload/delete operations without blocking chat generation."""
+        self.initialize()
+        principal = require_active_owner()
+        operation = f"upload:{thread_id}"
+        lease = secrets.token_hex(16)
+        now = self.clock()
+
+        with postgres_connection() as db:
+            db.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                (f"clawbit:{operation}",),
+            )
+            db.execute("DELETE FROM leases WHERE expires_at <= ?", (now,))
+            existing = db.execute(
+                "SELECT id FROM leases WHERE operation=? LIMIT 1",
+                (operation,),
+            ).fetchone()
+            if existing is not None:
+                raise UsageLimitError("concurrency", 5)
+
+            db.execute(
+                "INSERT INTO leases(id,principal,operation,expires_at) VALUES(?,?,?,?)",
+                (lease, principal, operation, now + 300),
+            )
+
+        return lease
+
     def connector_epoch(
         self,
         provider: str,
