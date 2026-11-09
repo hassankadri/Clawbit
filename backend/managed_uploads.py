@@ -108,3 +108,24 @@ def delete_attachment_record(thread_id: str, attachment_id: str) -> dict | None:
         ).fetchone()
 
     return {"object_key": row["object_key"]} if row else None
+
+
+
+def thread_for_object(object_key: str) -> str:
+    """Resolve a private object key only inside the current principal's scope."""
+    principal = current_owner()
+    with postgres_connection() as db:
+        row = db.execute(
+            """
+            SELECT thread_id
+            FROM upload_attachments
+            WHERE principal=? AND object_key=?
+            """,
+            (principal, object_key),
+        ).fetchone()
+    if row is None:
+        from ownership import OwnershipError
+
+        raise OwnershipError()
+    require_thread(row["thread_id"])
+    return row["thread_id"]
