@@ -54,7 +54,7 @@ def test_load_manifest_is_scoped_to_current_principal_and_thread(monkeypatch):
     })
     db = Connection(rows=[row])
     install(monkeypatch, db)
-    monkeypatch.setattr(managed_uploads, "require_thread", lambda thread: None)
+    monkeypatch.setattr(managed_uploads, "require_thread", lambda thread, **kwargs: None)
 
     with owner_context("principal-a"):
         result = managed_uploads.load_manifest("thread-a")
@@ -149,6 +149,7 @@ class SequenceConnection:
 def test_create_upload_intent_reserves_slot_for_current_principal(monkeypatch):
     db = SequenceConnection([(2,), (1,), None])
     install(monkeypatch, db)
+    monkeypatch.setattr(managed_uploads, "require_thread", lambda thread, **kwargs: None)
 
     with owner_context("principal-upload"):
         record = managed_uploads.create_upload_intent(
@@ -180,6 +181,7 @@ def test_create_upload_intent_reserves_slot_for_current_principal(monkeypatch):
 def test_create_upload_intent_rejects_when_attachment_slots_are_full(monkeypatch):
     db = SequenceConnection([(10,), (0,)])
     install(monkeypatch, db)
+    monkeypatch.setattr(managed_uploads, "require_thread", lambda thread, **kwargs: None)
 
     with owner_context("principal-full"):
         with pytest.raises(Exception, match="at most 10 attachments"):
@@ -215,6 +217,7 @@ def test_get_upload_intent_is_owner_and_expiry_scoped(monkeypatch):
     })
     db = Connection(row=row)
     install(monkeypatch, db)
+    monkeypatch.setattr(managed_uploads, "require_thread", lambda thread, **kwargs: None)
 
     with owner_context("principal-c"):
         intent = managed_uploads.get_upload_intent("thread-c", "c" * 32)
