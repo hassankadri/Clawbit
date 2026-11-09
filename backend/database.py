@@ -526,4 +526,5 @@ def search_memory(thread_id: str, query: str, workspace_id: str | None = None):
     return memory_store.store.context(query, workspace_id) or "No saved memory found."
 
 
-init_db()
+if PERSISTENCE_BACKEND == "sqlite":
+    init_db()
