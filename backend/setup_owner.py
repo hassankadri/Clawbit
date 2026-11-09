@@ -2,12 +2,13 @@
 
 from getpass import GetPassWarning, getpass
 import sys
+import os
 import warnings
 
 from dotenv import load_dotenv
 
-from auth import create_auth_store
-from auth_store import OwnerSetupError
+from auth import auth_database_path, create_auth_store
+from auth_store import AuthStore, OwnerSetupError
 
 
 def main() -> int:
@@ -16,7 +17,10 @@ def main() -> int:
     if len(sys.argv) != 1 or not sys.stdin.isatty():
         print("Run setup_owner.py interactively, without arguments.")
         return 1
-    store = create_auth_store()
+    if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+        store = create_auth_store()
+    else:
+        store = AuthStore(auth_database_path())
     if store.has_owner():
         print("This installation already has an owner.")
         return 1
