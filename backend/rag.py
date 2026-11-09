@@ -435,7 +435,10 @@ def complete_direct_upload(thread_id: str, attachment_id: str) -> dict:
 
     # A retry after a lost HTTP response must return the already committed
     # attachment without requiring the one-time upload intent again.
-    existing = get_attachment_records(thread_id, [attachment_id])
+    existing = [
+        item for item in _load_manifest(thread_id)
+        if item.get("attachment_id") == attachment_id
+    ]
     if existing:
         return existing[0]
 
@@ -448,7 +451,10 @@ def complete_direct_upload(thread_id: str, attachment_id: str) -> dict:
     with _upload_lock(thread_id):
         intent = get_upload_intent(thread_id, attachment_id)
         if intent is None:
-            existing = get_attachment_records(thread_id, [attachment_id])
+            existing = [
+                item for item in _load_manifest(thread_id)
+                if item.get("attachment_id") == attachment_id
+            ]
             if existing:
                 return existing[0]
             raise UploadError("Upload reservation expired. Please start the upload again.", 410)
