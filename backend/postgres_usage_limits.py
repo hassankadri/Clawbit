@@ -168,6 +168,38 @@ class PostgresUsageStore:
 
         return lease
 
+    def acquire_connector_refresh(self, provider: str, *, ttl_seconds: int = 90) -> str | None:
+        """Acquire a short, distributed lease for one account's OAuth refresh.
+
+        A competing Vercel instance returns None and waits for the first instance
+        to publish its refreshed token. The lease expires if the function dies.
+        """
+        self.initialize()
+        principal = require_active_owner()
+        now = self.clock()
+        lease = secrets.token_hex(16)
+        operation = f"oauth-refresh:{principal}:{provider}"
+
+        with postgres_connection() as db:
+            db.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                (f"clawbit:{operation}",),
+            )
+            db.execute("DELETE FROM leases WHERE expires_at <= ?", (now,))
+            existing = db.execute(
+                "SELECT id FROM leases WHERE principal=? AND operation=? LIMIT 1",
+                (principal, operation),
+            ).fetchone()
+            if existing is not None:
+                return None
+
+            db.execute(
+                "INSERT INTO leases(id,principal,operation,expires_at) VALUES(?,?,?,?)",
+                (lease, principal, operation, now + max(15, min(ttl_seconds, 180))),
+            )
+
+        return lease
+
     def connector_epoch(
         self,
         provider: str,
