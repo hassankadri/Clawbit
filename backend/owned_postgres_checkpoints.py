@@ -1,5 +1,10 @@
 """Principal-scoped PostgreSQL checkpoints for serverless deployments."""
 
+import os
+
+# Restrict MsgPack deserialization before importing checkpoint serializers.
+os.environ["LANGGRAPH_STRICT_MSGPACK"] = "true"
+
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any
 
