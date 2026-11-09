@@ -67,6 +67,16 @@ Create one Neon project in Singapore (`aws-ap-southeast-1`) and keep the databas
 
 Create a **private** bucket called `uploads`. Do not set `public_read`. Create a branch-scoped storage credential with both `storage:read` and `storage:write` scopes. The endpoint and storage credentials are branch-specific; do not reuse a Preview branch credential for production.
 
+The browser uploads directly to this private bucket using a 5-minute, single-object presigned PUT URL. Configure bucket CORS for the exact frontend HTTPS origin once after setting the backend environment:
+
+```powershell
+cd D:\My Projects\Clawbit AI\backend
+$env:CLAWBIT_FRONTEND_URL = "https://<frontend-project>.vercel.app"
+python -c "from object_storage import configure_bucket_cors; import os; configure_bucket_cors(os.environ['CLAWBIT_FRONTEND_URL'])"
+```
+
+This allows only `PUT` and `HEAD` from that exact origin, with the required content-type and S3 signature headers. Repeat with the Preview frontend origin only if you intend to test direct uploads from Preview. Do not use wildcard CORS.
+
 Clawbit keeps the 10 MiB upload limit without sending file bytes through Vercel Functions. The browser asks the backend for a short-lived, single-object presigned PUT URL, uploads directly to Neon Object Storage, then calls the authenticated completion endpoint. The backend verifies the object size and content type, reads and validates the file, copies it to a new immutable key, indexes it, and commits attachment metadata. The browser never receives Neon access keys or the final object key.
 
 ### Configure bucket CORS for the frontend
