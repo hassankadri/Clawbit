@@ -84,3 +84,79 @@ def get_bytes(key: str, *, max_bytes: int) -> bytes:
 
 def delete_object(key: str) -> None:
     _client().delete_object(Bucket=_bucket(), Key=key)
+
+
+
+def presign_put(
+    key: str,
+    *,
+    content_type: str,
+    expires_in: int = 300,
+) -> str:
+    """Create a short-lived browser PUT URL; it grants access to one object key."""
+    ttl = max(60, min(int(expires_in), 600))
+    return _client().generate_presigned_url(
+        "put_object",
+        Params={
+            "Bucket": _bucket(),
+            "Key": key,
+            "ContentType": content_type,
+        },
+        ExpiresIn=ttl,
+        HttpMethod="PUT",
+    )
+
+
+def head_object(key: str) -> dict:
+    """Read only object metadata; never return storage credentials or URLs."""
+    response = _client().head_object(Bucket=_bucket(), Key=key)
+    return {
+        "size": response.get("ContentLength"),
+        "content_type": response.get("ContentType"),
+        "etag": response.get("ETag"),
+    }
+
+
+def put_bytes(key: str, content: bytes, content_type: str) -> None:
+    """Save validated bytes under a new immutable object key."""
+    _client().put_object(
+        Bucket=_bucket(),
+        Key=key,
+        Body=content,
+        ContentLength=len(content),
+        ContentType=content_type,
+    )
+
+
+def configure_bucket_cors(frontend_origin: str) -> None:
+    """Restrict signed browser PUT/HEAD requests to the exact frontend origin."""
+    from urllib.parse import urlsplit
+
+    parsed = urlsplit(frontend_origin)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ObjectStorageConfigurationError(
+            "CLAWBIT_FRONTEND_URL must be an exact HTTPS origin for bucket CORS."
+        )
+
+    _client().put_bucket_cors(
+        Bucket=_bucket(),
+        CORSConfiguration={
+            "CORSRules": [
+                {
+                    "AllowedOrigins": [frontend_origin.rstrip("/")],
+                    "AllowedMethods": ["PUT", "HEAD"],
+                    "AllowedHeaders": ["content-type", "x-amz-*"],
+                    "ExposeHeaders": ["ETag"],
+                    "MaxAgeSeconds": 300,
+                }
+            ]
+        },
+    )
