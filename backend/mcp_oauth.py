@@ -158,11 +158,11 @@ def _consume_state(state: str, provider: str, session_id: str) -> dict:
             row = db.execute(
                 """
                 DELETE FROM oauth_states
-                WHERE state = ?
+                WHERE state = ? AND principal = ? AND provider = ? AND session_id = ?
                 RETURNING principal,provider,session_id,version,redirect_uri,
                           connection_epoch,verifier,created_at,expires_at,frontend_url
                 """,
-                (state,),
+                (state, key[0], provider, session_id),
             ).fetchone()
         if row is None:
             raise RuntimeError("Invalid or expired OAuth state.")
@@ -490,7 +490,11 @@ async def _get_google_drive_access_token_postgres() -> str | None:
                 pass
             raise RuntimeError(OAUTH_ERROR) from None
         finally:
-            usage_limits.store.release(lease)
+            try:
+                usage_limits.store.release(lease)
+            except Exception:
+                # The database lease has a short expiry as a crash fallback.
+                pass
 
 
 @limited("mcp")
