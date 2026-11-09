@@ -49,6 +49,23 @@ class MemoryStore:
         with self._lock:
             if self._initialized:
                 return
+            if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+                from postgres_db import postgres_connection
+
+                with postgres_connection() as db:
+                    row = db.execute("""
+                        SELECT
+                            to_regclass('public.long_term_memory') AS memories_table,
+                            to_regclass('public.memory_details') AS details_table,
+                            to_regclass('public.memory_audit') AS audit_table
+                    """).fetchone()
+                if any(row[key] is None for key in ("memories_table", "details_table", "audit_table")):
+                    raise RuntimeError(
+                        "Neon memory schema is incomplete. "
+                        "Run setup_postgres_schema.py before starting Clawbit."
+                    )
+                self._initialized = True
+                return
             self.path.parent.mkdir(parents=True, exist_ok=True)
             existed = self.path.exists()
             with closing(sqlite3.connect(self.path, timeout=30)) as db:
@@ -89,8 +106,15 @@ class MemoryStore:
             self._initialized = True
 
     @contextmanager
-    def connection(self) -> Iterator[sqlite3.Connection]:
+    def connection(self):
         self.initialize()
+        if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+            from postgres_db import postgres_connection
+
+            with postgres_connection() as db:
+                yield db
+            return
+
         with closing(sqlite3.connect(self.path, timeout=30)) as db, db:
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA foreign_keys=ON")
@@ -149,9 +173,10 @@ class MemoryStore:
                     return {"id": row["id"], "version": row["version"]}, True
             cursor = db.execute(
                 "INSERT INTO long_term_memory(thread_id,workspace_id,memory,created_at) "
-                "VALUES(?,?,?,datetime('now'))", (thread, target, content),
+                "VALUES(?,?,?,datetime('now')) RETURNING id",
+                (thread, target, content),
             )
-            memory_id = cursor.lastrowid
+            memory_id = cursor.fetchone()[0]
             db.execute("INSERT INTO memory_details VALUES(?,?,0,0,?)", (memory_id, scope, now))
             db.execute(
                 "INSERT INTO memory_audit(memory_id,principal,action,created_at) VALUES(?,?,?,?)",
