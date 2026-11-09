@@ -107,6 +107,10 @@ def _decrypt(payload: bytes) -> bytes:
     )
 
 
+def _postgres_enabled() -> bool:
+    return os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres"
+
+
 def _open(create: bool = False) -> sqlite3.Connection | None:
     path = database_path()
 
@@ -184,32 +188,51 @@ def save_record(
         ciphertext = _encrypt(plaintext)
 
         with _STORE_LOCK:
-            connection = _open(create=True)
-            assert connection is not None
+            if _postgres_enabled():
+                from postgres_db import postgres_connection
 
-            try:
-                with connection:
-                    connection.execute("BEGIN IMMEDIATE")
-
+                with postgres_connection() as connection:
+                    connection.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                        (f"clawbit:credential:{principal}:{provider}",),
+                    )
                     if usage_limits.store.connector_epoch(provider) != epoch:
                         raise CredentialStoreError(
                             "The connector was revoked during persistence."
                         )
-
                     connection.execute(
                         """
-                        INSERT INTO credentials
-                            (principal, provider, epoch, ciphertext)
-                        VALUES (?, ?, ?, ?)
-                        ON CONFLICT(principal, provider)
-                        DO UPDATE SET
-                            epoch = excluded.epoch,
-                            ciphertext = excluded.ciphertext
+                        INSERT INTO credentials(principal,provider,epoch,ciphertext)
+                        VALUES(?,?,?,?)
+                        ON CONFLICT(principal,provider)
+                        DO UPDATE SET epoch=EXCLUDED.epoch,ciphertext=EXCLUDED.ciphertext
                         """,
                         (principal, provider, epoch, ciphertext),
                     )
-            finally:
-                connection.close()
+            else:
+                connection = _open(create=True)
+                assert connection is not None
+                try:
+                    with connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        if usage_limits.store.connector_epoch(provider) != epoch:
+                            raise CredentialStoreError(
+                                "The connector was revoked during persistence."
+                            )
+                        connection.execute(
+                            """
+                            INSERT INTO credentials
+                                (principal, provider, epoch, ciphertext)
+                            VALUES (?, ?, ?, ?)
+                            ON CONFLICT(principal, provider)
+                            DO UPDATE SET
+                                epoch = excluded.epoch,
+                                ciphertext = excluded.ciphertext
+                            """,
+                            (principal, provider, epoch, ciphertext),
+                        )
+                finally:
+                    connection.close()
 
     except CredentialStoreError:
         raise
@@ -228,30 +251,37 @@ def load_record(provider: str) -> dict | None:
 
     with _STORE_LOCK:
         try:
-            connection = _open()
-        except Exception:
-            raise CredentialStoreError(
-                "Unable to read connector credential storage."
-            ) from None
+            if _postgres_enabled():
+                from postgres_db import postgres_connection
 
-        if connection is None:
-            return None
-
-        try:
-            row = connection.execute(
-                """
-                SELECT epoch, ciphertext
-                FROM credentials
-                WHERE principal = ? AND provider = ?
-                """,
-                (principal, provider),
-            ).fetchone()
+                with postgres_connection() as connection:
+                    row = connection.execute(
+                        """
+                        SELECT epoch, ciphertext
+                        FROM credentials
+                        WHERE principal = ? AND provider = ?
+                        """,
+                        (principal, provider),
+                    ).fetchone()
+            else:
+                connection = _open()
+                if connection is None:
+                    return None
+                try:
+                    row = connection.execute(
+                        """
+                        SELECT epoch, ciphertext
+                        FROM credentials
+                        WHERE principal = ? AND provider = ?
+                        """,
+                        (principal, provider),
+                    ).fetchone()
+                finally:
+                    connection.close()
         except Exception:
             raise CredentialStoreError(
                 "Unable to read connector credentials."
             ) from None
-        finally:
-            connection.close()
 
     if row is None:
         return None
@@ -304,11 +334,22 @@ def invalidate_record(provider: str) -> None:
     current_epoch = usage_limits.store.connector_epoch(provider)
 
     with _STORE_LOCK:
-        connection = _open()
+        if _postgres_enabled():
+            from postgres_db import postgres_connection
 
-        if connection is None:
+            with postgres_connection() as connection:
+                connection.execute(
+                    """
+                    DELETE FROM credentials
+                    WHERE principal=? AND provider=? AND epoch<?
+                    """,
+                    (principal, provider, current_epoch),
+                )
             return
 
+        connection = _open()
+        if connection is None:
+            return
         try:
             with connection:
                 connection.execute(
