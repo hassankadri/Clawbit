@@ -563,172 +563,185 @@ async function requestJSON<T>(
 /* ATTACHMENT UPLOAD                                      */
 /* ====================================================== */
 
+interface UploadStartResponse {
+  mode: "multipart" | "direct";
+  attachment_id?: string;
+  upload_url?: string;
+  upload_headers?: Record<string, string>;
+}
+
 export function uploadAttachment(
   threadId: string,
   file: File,
-  handlers:
-    UploadProgressHandlers = {},
+  handlers: UploadProgressHandlers = {},
 ) {
-  const xhr =
-    new XMLHttpRequest();
+  let activeXhr: XMLHttpRequest | null = null;
+  let requestController: AbortController | null = null;
+  let aborted = false;
 
-  const promise =
-    new Promise<AttachmentUploadResponse>(
-      (
-        resolve,
-        reject,
-      ) => {
-        xhr.open(
-          "POST",
-          `${API_URL}/attachments/upload`,
-        );
+  const abort = () => {
+    aborted = true;
+    requestController?.abort();
+    activeXhr?.abort();
+  };
 
-        xhr.withCredentials = true;
-        let requestCsrfToken = "";
-        try {
-          const headers = authenticatedHeaders();
-          requestCsrfToken = headers["X-CSRF-Token"];
-          for (const [name, value] of Object.entries(headers)) {
-            xhr.setRequestHeader(name, value);
-          }
-        } catch (error) {
-          reject(error);
-          return;
-        }
-        const unregister = registerUpload(() => xhr.abort());
-        xhr.onloadend = unregister;
+  const unregister = registerUpload(abort);
 
-        xhr.upload.onprogress =
-          (
-            event,
-          ) => {
-            if (
-              !event.lengthComputable
-            ) {
-              return;
-            }
+  function sendXhr(
+    method: "POST" | "PUT",
+    url: string,
+    body: FormData | File,
+    headers: Record<string, string>,
+    withCredentials: boolean,
+    onProgress?: UploadProgressHandlers["onProgress"],
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      activeXhr = xhr;
+      xhr.open(method, url);
+      xhr.withCredentials = withCredentials;
 
-            const progress =
-              Math.round(
-                (
-                  event.loaded /
-                  event.total
-                ) * 100,
-              );
+      for (const [name, value] of Object.entries(headers)) {
+        xhr.setRequestHeader(name, value);
+      }
 
-            handlers.onProgress?.(
-              progress,
-            );
-          };
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        onProgress?.(Math.round((event.loaded / event.total) * 100));
+      };
 
-        xhr.onerror =
-          () => {
-            const message =
-              backendUnavailableMessage();
-
-            handlers.onError?.(
-              message,
-            );
-
-            reject(
-              new Error(
-                message,
-              ),
-            );
-          };
-
-        xhr.onabort =
-          () => {
-            const message =
-              "Upload canceled.";
-
-            handlers.onError?.(
-              message,
-            );
-
-            reject(
-              new Error(
-                message,
-              ),
-            );
-          };
-
-        xhr.onload =
-          () => {
-            handleAuthStatus(xhr.status, requestCsrfToken);
-            if (
-              xhr.status <
-                200 ||
-              xhr.status >=
-                300
-            ) {
-              const message =
-                getErrorMessage(
+      xhr.onerror = () => reject(new Error(
+        withCredentials
+          ? backendUnavailableMessage()
+          : "Could not reach private file storage. Please retry.",
+      ));
+      xhr.onabort = () => reject(new Error("Upload canceled."));
+      xhr.onload = () => {
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(
+            withCredentials
+              ? getErrorMessage(
                   xhr.responseText,
-
                   "Upload failed. Please try again.",
                   xhr.getResponseHeader("Retry-After"),
-                );
+                )
+              : "Private file storage rejected the upload. Please start again.",
+          ));
+          return;
+        }
+        resolve(xhr.responseText);
+      };
+      xhr.onloadend = () => {
+        if (activeXhr === xhr) activeXhr = null;
+      };
 
-              handlers.onError?.(
-                message,
-              );
+      if (aborted) {
+        xhr.abort();
+        return;
+      }
+      xhr.send(body);
+    });
+  }
 
-              reject(
-                new Error(
-                  message,
-                ),
-              );
+  const promise = (async (): Promise<AttachmentUploadResponse> => {
+    requestController = new AbortController();
 
-              return;
-            }
+    try {
+      const start = await requestJSON<UploadStartResponse>(
+        "/attachments/upload/start",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            thread_id: threadId,
+            filename: file.name,
+            size: file.size,
+          }),
+        },
+        requestController.signal,
+      );
 
-            try {
-              resolve(
-                JSON.parse(
-                  xhr.responseText,
-                ) as AttachmentUploadResponse,
-              );
-            } catch {
-              const message =
-                "Upload failed because the backend returned an invalid response.";
+      if (aborted) throw new DOMException("Upload canceled.", "AbortError");
 
-              handlers.onError?.(
-                message,
-              );
+      if (start.mode === "multipart") {
+        let csrfToken = "";
+        const headers: Record<string, string> = {};
+        try {
+          const authenticated = authenticatedHeaders();
+          csrfToken = authenticated["X-CSRF-Token"];
+          Object.assign(headers, authenticated);
+        } catch (error) {
+          throw error;
+        }
 
-              reject(
-                new Error(
-                  message,
-                ),
-              );
-            }
-          };
+        const formData = new FormData();
+        formData.append("thread_id", threadId);
+        formData.append("file", file);
 
-        const formData =
-          new FormData();
-
-        formData.append(
-          "thread_id",
-          threadId,
-        );
-
-        formData.append(
-          "file",
-          file,
-        );
-
-        xhr.send(
+        const responseText = await sendXhr(
+          "POST",
+          `${API_URL}/attachments/upload`,
           formData,
+          headers,
+          true,
+          handlers.onProgress,
         );
-      },
-    );
+        // Multipart responses are authenticated API responses; process expiry
+        // in the same way as the previous XMLHttpRequest implementation.
+        handleAuthStatus(200, csrfToken);
+        try {
+          return JSON.parse(responseText) as AttachmentUploadResponse;
+        } catch {
+          throw new Error("Upload failed because the backend returned an invalid response.");
+        }
+      }
+
+      if (
+        start.mode !== "direct" ||
+        !start.attachment_id ||
+        !start.upload_url ||
+        !start.upload_headers
+      ) {
+        throw new Error("The backend returned an invalid upload reservation.");
+      }
+
+      // This request goes directly to the private object-storage endpoint.
+      // Never attach Clawbit cookies, CSRF tokens or cloud credentials.
+      await sendXhr(
+        "PUT",
+        start.upload_url,
+        file,
+        start.upload_headers,
+        false,
+        handlers.onProgress,
+      );
+
+      if (aborted) throw new DOMException("Upload canceled.", "AbortError");
+
+      return await requestJSON<AttachmentUploadResponse>(
+        "/attachments/upload/complete",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            thread_id: threadId,
+            attachment_id: start.attachment_id,
+          }),
+        },
+        requestController.signal,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Upload failed. Please try again.";
+      handlers.onError?.(message);
+      throw error;
+    }
+  })().finally(() => {
+    unregister();
+    activeXhr = null;
+    requestController = null;
+  });
 
   return {
     promise,
-
-    abort: () =>
-      xhr.abort(),
+    abort,
   };
 }
 
