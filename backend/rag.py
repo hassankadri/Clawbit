@@ -28,7 +28,7 @@ import docx2txt
 from upload_security import (
     MAX_ATTACHMENTS, MAX_DOCUMENT_CHUNKS, MAX_EXTRACTED_CHARS, MAX_UPLOAD_BYTES,
     UPLOAD_CHUNK_BYTES, SUPPORTED_DOCUMENT_SUFFIXES, SUPPORTED_IMAGE_SUFFIXES,
-    UploadError, checked_pdf, guarded_path, read_bounded, safe_open,
+    MIME_BY_SUFFIX, UploadError, checked_pdf, guarded_path, read_bounded, safe_open,
     thread_directory, thread_lock, upload_suffix, validate_file, validate_thread_id,
 )
 from ownership import OwnershipError, current_owner, require_thread
@@ -310,6 +310,269 @@ async def receive_uploaded_file(upload, thread_id: str):
             raise
         finally:
             await upload.close()
+
+
+def _sweep_expired_upload_intents() -> None:
+    """Remove abandoned objects/vectors without deleting live attachment records."""
+    if PERSISTENCE_BACKEND != "postgres":
+        return
+
+    from managed_uploads import delete_upload_intent, list_expired_upload_intents
+    from object_storage import delete_object
+
+    for intent in list_expired_upload_intents(limit=100):
+        thread_id = intent["thread_id"]
+        attachment_id = intent["attachment_id"]
+        try:
+            require_thread(thread_id)
+            # Keep the durable intent until all cleanup operations succeed. If a
+            # storage call fails, a later request retries the same cleanup.
+            vectorstore.delete(where=_index_filter(thread_id, attachment_id))
+            for key in (intent.get("staging_key"), intent.get("final_key")):
+                if key:
+                    delete_object(key)
+            delete_upload_intent(
+                thread_id,
+                attachment_id,
+                expired_only=True,
+            )
+        except Exception:
+            # Expired intent remains available for later cleanup; never turn a
+            # storage cleanup failure into an upload success.
+            continue
+
+
+@limited("upload")
+def create_direct_upload(
+    thread_id: str,
+    filename: str,
+    expected_size: int,
+) -> dict:
+    """Reserve an attachment and issue a one-object, short-lived presigned PUT."""
+    if PERSISTENCE_BACKEND != "postgres":
+        return {"mode": "multipart"}
+
+    from managed_uploads import create_upload_intent, delete_upload_intent
+    from object_storage import delete_object, presign_put
+
+    validate_thread_id(thread_id)
+    require_thread(thread_id, create=True)
+
+    if type(expected_size) is not int or not 1 <= expected_size <= MAX_UPLOAD_BYTES:
+        raise UploadError("Upload must be between 1 byte and 10 MiB.", 413)
+
+    suffix = upload_suffix(filename)
+    kind = "document" if suffix in SUPPORTED_DOCUMENT_SUFFIXES else "image"
+    mime_type = MIME_BY_SUFFIX[suffix]
+    attachment_id = uuid4().hex
+    staging_key = f"pending-uploads/{uuid4().hex}{suffix}"
+    expires_at = time.time() + 300
+
+    _sweep_expired_upload_intents()
+
+    with _upload_lock(thread_id):
+        intent = create_upload_intent(
+            thread_id,
+            attachment_id=attachment_id,
+            staging_key=staging_key,
+            name=filename,
+            suffix=suffix,
+            mime_type=mime_type,
+            kind=kind,
+            expected_size=expected_size,
+            expires_at=expires_at,
+            max_attachments=MAX_ATTACHMENTS,
+        )
+
+    try:
+        upload_url = presign_put(
+            staging_key,
+            content_type=mime_type,
+            expires_in=300,
+        )
+    except Exception:
+        try:
+            delete_upload_intent(thread_id, attachment_id)
+        except Exception:
+            pass
+        raise UploadError(
+            "Private upload storage is unavailable. Please retry.",
+            503,
+        ) from None
+
+    return {
+        "mode": "direct",
+        "attachment_id": attachment_id,
+        "upload_url": upload_url,
+        "upload_headers": {"Content-Type": mime_type},
+        "expires_at": intent["expires_at"],
+        "name": filename,
+        "kind": kind,
+        "mime_type": mime_type,
+        "size": expected_size,
+    }
+
+
+@limited("upload")
+def complete_direct_upload(thread_id: str, attachment_id: str) -> dict:
+    """Validate, ingest and atomically publish a previously reserved upload."""
+    if PERSISTENCE_BACKEND != "postgres":
+        raise UploadError("Direct uploads are available only in hosted mode.", 404)
+
+    from managed_uploads import (
+        commit_upload_intent,
+        delete_upload_intent,
+        get_upload_intent,
+        set_upload_intent_final_key,
+    )
+    from object_storage import delete_object, get_bytes, head_object, put_bytes
+
+    validate_thread_id(thread_id)
+    if not isinstance(attachment_id, str) or not re.fullmatch(r"[a-f0-9]{32}", attachment_id):
+        raise UploadError("Invalid attachment ID.")
+
+    require_thread(thread_id)
+
+    # A retry after a lost HTTP response must return the already committed
+    # attachment without requiring the one-time upload intent again.
+    existing = get_attachment_records(thread_id, [attachment_id])
+    if existing:
+        return existing[0]
+
+    _sweep_expired_upload_intents()
+
+    intent = get_upload_intent(thread_id, attachment_id)
+    if intent is None:
+        raise UploadError("Upload reservation expired. Please start the upload again.", 410)
+
+    with _upload_lock(thread_id):
+        intent = get_upload_intent(thread_id, attachment_id)
+        if intent is None:
+            existing = get_attachment_records(thread_id, [attachment_id])
+            if existing:
+                return existing[0]
+            raise UploadError("Upload reservation expired. Please start the upload again.", 410)
+
+        now = time.time()
+        if intent["expires_at"] <= now:
+            raise UploadError("Upload reservation expired. Please start the upload again.", 410)
+
+        staging_key = intent["staging_key"]
+        final_key = intent.get("final_key") or f"uploads/{uuid4().hex}{intent['suffix']}"
+        temporary = _thread_upload_dir(thread_id, create=True) / f"ingest-{uuid4().hex}{intent['suffix']}"
+
+        try:
+            # If an earlier attempt already copied the private final object,
+            # use it as the retry source. Otherwise verify the browser's object.
+            source_key = final_key
+            try:
+                source_info = head_object(final_key)
+            except Exception:
+                source_key = staging_key
+                try:
+                    source_info = head_object(staging_key)
+                except Exception:
+                    raise UploadError("The uploaded file was not found. Upload it again.", 409) from None
+
+            actual_size = source_info.get("size")
+            if (
+                type(actual_size) is not int
+                or actual_size <= 0
+                or actual_size > MAX_UPLOAD_BYTES
+                or actual_size != intent["expected_size"]
+            ):
+                raise UploadError("Uploaded file size does not match the reservation.", 413)
+
+            stored_content_type = str(source_info.get("content_type") or "").split(";", 1)[0].strip().lower()
+            if stored_content_type != intent["mime_type"]:
+                raise UploadError("Uploaded file type does not match the selected extension.", 415)
+
+            raw = get_bytes(source_key, max_bytes=MAX_UPLOAD_BYTES)
+            if len(raw) != intent["expected_size"]:
+                raise UploadError("Uploaded file size does not match the reservation.", 413)
+
+            with safe_open(UPLOAD_ROOT, temporary, "xb") as stream:
+                stream.write(raw)
+
+            kind, mime_type = validate_file(UPLOAD_ROOT, temporary)
+            if kind != intent["kind"] or mime_type != intent["mime_type"]:
+                raise UploadError("File contents do not match the selected file type.", 415)
+
+            pages = _extract_pages(temporary) if kind == "document" else []
+            preview = None
+            if kind == "document":
+                extracted_text = "\n".join(page_text for _, page_text in pages)
+                if not extracted_text.strip():
+                    raise UploadError("No text could be extracted from this file.")
+                preview = _preview_text(extracted_text)
+
+            set_upload_intent_final_key(thread_id, attachment_id, final_key)
+
+            if source_key != final_key:
+                # Copy validated bytes to a fresh immutable key. The browser's
+                # presigned URL only permits writes to the staging key.
+                put_bytes(final_key, raw, mime_type)
+
+            if kind == "document":
+                add_document_to_rag(
+                    str(temporary),
+                    thread_id,
+                    attachment_id=attachment_id,
+                    source=intent["name"],
+                    _pages=pages,
+                )
+
+            # Remove the mutable staging object before publishing the manifest.
+            # If this fails, the intent/final object remain and retry is safe.
+            delete_object(staging_key)
+
+            record = {
+                "attachment_id": attachment_id,
+                "name": intent["name"],
+                "kind": kind,
+                "mime_type": mime_type,
+                "size": len(raw),
+                "path": final_key,
+                "object_key": final_key,
+                "source": intent["name"],
+                "preview": preview,
+                "rag_error": None,
+                "created_at": time.time(),
+                "thread_id": thread_id,
+            }
+            committed = commit_upload_intent(thread_id, attachment_id, record)
+            _RAG_CACHE.clear()
+            return committed
+
+        except UploadError:
+            # Invalid content must not leave a usable reservation or vectors.
+            try:
+                vectorstore.delete(where=_index_filter(thread_id, attachment_id))
+            except Exception:
+                pass
+            try:
+                delete_object(staging_key)
+            except Exception:
+                pass
+            if final_key:
+                try:
+                    delete_object(final_key)
+                except Exception:
+                    pass
+            try:
+                delete_upload_intent(thread_id, attachment_id)
+            except Exception:
+                pass
+            raise
+        except Exception as exc:
+            # Transient DB/storage/model failures retain the intent, final object
+            # and vectors so completion can be retried until the intent expires.
+            raise UploadError(
+                "The file is uploaded but could not yet be finalized. Retry the upload completion.",
+                503,
+            ) from exc
+        finally:
+            _remove_file(temporary)
 
 
 @limited("upload")
