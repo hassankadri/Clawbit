@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import contextmanager
 from typing import List
 import json
 import hashlib
@@ -38,7 +39,11 @@ from evidence import document_source, evidence_note, register_sources
 BACKEND_DIR = Path(__file__).resolve().parent
 
 PERSISTENCE_BACKEND = os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower()
-RUNTIME_DIR = Path(os.environ.get("CLAWBIT_RUNTIME_DIR", BACKEND_DIR))
+RUNTIME_DIR = (
+    Path(os.getenv("CLAWBIT_TMP_DIR", "/tmp/clawbit-runtime"))
+    if PERSISTENCE_BACKEND == "postgres"
+    else Path(os.environ.get("CLAWBIT_RUNTIME_DIR", BACKEND_DIR))
+)
 UPLOAD_ROOT = RUNTIME_DIR / "uploads"
 CHROMA_ROOT = RUNTIME_DIR / "chroma_db"
 
@@ -78,11 +83,33 @@ def _thread_upload_dir(thread_id: str, *, create=False) -> Path:
     return thread_directory(UPLOAD_ROOT, thread_id, create=create)
 
 
+@contextmanager
+def _upload_lock(thread_id: str):
+    """Use a distributed expiring lease in Vercel; use OS locks locally."""
+    if PERSISTENCE_BACKEND == "postgres":
+        from usage_limits import store as usage_store
+
+        lease = usage_store.acquire_thread(thread_id)
+        try:
+            yield _thread_upload_dir(thread_id, create=True)
+        finally:
+            usage_store.release(lease)
+        return
+
+    with _upload_lock(thread_id) as directory:
+        yield directory
+
+
 def _manifest_path(thread_id: str) -> Path:
     return _thread_upload_dir(thread_id) / "manifest.json"
 
 
 def _load_manifest(thread_id: str) -> list[dict]:
+    if PERSISTENCE_BACKEND == "postgres":
+        from managed_uploads import load_manifest
+
+        return load_manifest(thread_id)
+
     path = _manifest_path(thread_id)
 
     guarded_path(UPLOAD_ROOT, path)
@@ -99,6 +126,11 @@ def _load_manifest(thread_id: str) -> list[dict]:
 
 
 def _save_manifest(thread_id: str, manifest: list[dict]) -> None:
+    if PERSISTENCE_BACKEND == "postgres":
+        from managed_uploads import save_manifest
+
+        save_manifest(thread_id, manifest)
+        return
     _write_json(_manifest_path(thread_id), manifest)
 
 
@@ -177,6 +209,10 @@ def _index_filter(thread_id, attachment_id):
 
 def _recover_pending(thread_id):
     """Finish interrupted cleanup under the thread lock; never expose pending vectors."""
+    if PERSISTENCE_BACKEND == "postgres":
+        # Durable upload metadata and vector records are committed through Neon.
+        # No per-instance filesystem journal is authoritative in serverless mode.
+        return
     journal = _thread_upload_dir(thread_id) / ".pending.json"
     guarded_path(UPLOAD_ROOT, journal)
     if not journal.exists():
@@ -247,7 +283,7 @@ async def receive_uploaded_file(upload, thread_id: str):
 def save_uploaded_file(file_path: str, thread_id: str, original_name: str | None = None):
     require_thread(thread_id)
     path = _attachment_path(file_path, thread_id)
-    with thread_lock(UPLOAD_ROOT, thread_id):
+    with _upload_lock(thread_id):
         _recover_pending(thread_id)
         _check_capacity(thread_id)
         if any(_attachment_path(item["path"], thread_id) == path for item in _load_manifest(thread_id)):
