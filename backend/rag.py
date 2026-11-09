@@ -96,7 +96,7 @@ def _upload_lock(thread_id: str):
             usage_store.release(lease)
         return
 
-    with _upload_lock(thread_id) as directory:
+    with thread_lock(UPLOAD_ROOT, thread_id) as directory:
         yield directory
 
 
@@ -265,7 +265,7 @@ async def receive_uploaded_file(upload, thread_id: str):
     suffix = upload_suffix(upload.filename or "")
     if upload.size is not None and upload.size > MAX_UPLOAD_BYTES:
         raise UploadError("Upload exceeds 10 MiB.", 413)
-    with thread_lock(UPLOAD_ROOT, thread_id) as directory:
+    with _upload_lock(thread_id) as directory:
         _recover_pending(thread_id)
         _check_capacity(thread_id)
         path = directory / f"{uuid4().hex}{suffix}"
@@ -304,7 +304,10 @@ def save_uploaded_file(file_path: str, thread_id: str, original_name: str | None
     with _upload_lock(thread_id):
         _recover_pending(thread_id)
         _check_capacity(thread_id)
-        if any(_attachment_path(item["path"], thread_id) == path for item in _load_manifest(thread_id)):
+        if PERSISTENCE_BACKEND == "postgres":
+            if any(item.get("source") == path.name for item in _load_manifest(thread_id)):
+                raise UploadError("Attachment already exists.")
+        elif any(_attachment_path(item["path"], thread_id) == path for item in _load_manifest(thread_id)):
             raise UploadError("Attachment already exists.")
         return _save_uploaded_file(path, thread_id, original_name)
 
@@ -333,16 +336,20 @@ def _save_uploaded_file(path: Path, thread_id: str, original_name: str | None):
         _remove_file(path)
         path = destination
 
+    object_key = f"uploads/{uuid4().hex}{path.suffix.lower()}" if PERSISTENCE_BACKEND == "postgres" else None
     record = {
         "attachment_id": attachment_id,
         "name": display_name,
         "kind": kind,
         "mime_type": mime_type,
         "size": path.stat().st_size,
-        "path": str(path),
+        "path": object_key or str(path),
+        "object_key": object_key,
         "source": path.name,
         "preview": None,
         "rag_error": None,
+        "created_at": time.time(),
+        "thread_id": thread_id,
     }
 
     journal = path.parent / ".pending.json"
@@ -353,7 +360,18 @@ def _save_uploaded_file(path: Path, thread_id: str, original_name: str | None):
             if not extracted_text.strip():
                 raise UploadError("No text could be extracted from this file.")
             record["preview"] = _preview_text(extracted_text)
-        _write_json(journal, {"operation": "upload", "attachment_id": attachment_id, "path": str(path)})
+        if PERSISTENCE_BACKEND == "postgres":
+            from object_storage import put_file
+
+            try:
+                put_file(object_key, path, mime_type)
+            except Exception:
+                raise UploadError(
+                    "The file could not be saved to private storage. Please retry.",
+                    503,
+                ) from None
+        else:
+            _write_json(journal, {"operation": "upload", "attachment_id": attachment_id, "path": str(path)})
         if kind == "document":
             add_document_to_rag(
                 str(path), thread_id, attachment_id=attachment_id, source=display_name, _pages=pages,
@@ -370,8 +388,20 @@ def _save_uploaded_file(path: Path, thread_id: str, original_name: str | None):
             if isinstance(exc, Exception):
                 return record  # The pending marker is cleaned on the next mutation.
             raise
+        if PERSISTENCE_BACKEND == "postgres":
+            try:
+                vectorstore.delete(where=_index_filter(thread_id, attachment_id))
+            except Exception:
+                pass
+            if object_key:
+                try:
+                    from object_storage import delete_object
+
+                    delete_object(object_key)
+                except Exception:
+                    pass
         _remove_file(path)
-        if journal.exists():
+        if PERSISTENCE_BACKEND != "postgres" and journal.exists():
             _recover_pending(thread_id)
         if isinstance(exc, UploadError) or not isinstance(exc, Exception):
             raise
@@ -509,12 +539,26 @@ def add_document_to_rag(
 
 def delete_attachment(thread_id: str, attachment_id: str) -> bool:
     require_thread(thread_id)
-    with thread_lock(UPLOAD_ROOT, thread_id):
+    with _upload_lock(thread_id):
         _recover_pending(thread_id)
         records = get_attachment_records(thread_id, [attachment_id])
         if not records:
             return False
         record = records[0]
+        if PERSISTENCE_BACKEND == "postgres":
+            from managed_uploads import delete_attachment_record
+            from object_storage import delete_object
+
+            deleted = delete_attachment_record(thread_id, attachment_id)
+            if not deleted:
+                return False
+            try:
+                vectorstore.delete(where=_index_filter(thread_id, attachment_id))
+            finally:
+                delete_object(deleted["object_key"])
+            _RAG_CACHE.clear()
+            return True
+
         journal = _thread_upload_dir(thread_id) / ".pending.json"
         _write_json(journal, {"operation": "delete", "attachment_id": attachment_id, "path": record["path"]})
         _recover_pending(thread_id)
