@@ -56,6 +56,10 @@ class _NoRedirects(HTTPRedirectHandler):
         raise RuntimeError(OAUTH_ERROR)
 
 
+def _postgres_enabled() -> bool:
+    return os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres"
+
+
 def _key(provider: str) -> tuple[str, str]:
     return require_active_owner(), provider
 
@@ -94,26 +98,88 @@ def _create_state(
     if not session_id:
         raise RuntimeError("An authenticated session is required.")
     now = time.time()
+    epoch = usage_limits.store.connector_epoch(provider)
+    state = secrets.token_urlsafe(32)
+    frontend = frontend_url or _frontend_url()
+
+    if _postgres_enabled():
+        from postgres_db import postgres_connection
+
+        with postgres_connection() as db:
+            db.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+                (f"clawbit:oauth:{key[0]}",),
+            )
+            db.execute("DELETE FROM oauth_states WHERE expires_at <= ?", (now,))
+            active = db.execute(
+                "SELECT COUNT(*) FROM oauth_states WHERE principal=? AND expires_at>?",
+                (key[0], now),
+            ).fetchone()[0]
+            if active >= 32:
+                raise RuntimeError("Too many pending connections. Try again later.")
+            db.execute(
+                """
+                INSERT INTO oauth_states
+                    (state,principal,provider,session_id,version,redirect_uri,
+                     connection_epoch,verifier,created_at,expires_at,frontend_url)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    state, key[0], provider, session_id, epoch, redirect_uri,
+                    epoch, verifier, now, now + STATE_TTL_SECONDS, frontend,
+                ),
+            )
+        return state
+
     with _store_lock:
-        expired = [state for state, record in _oauth_states.items()
+        expired = [item for item, record in _oauth_states.items()
                    if now - record["created_at"] > STATE_TTL_SECONDS]
-        for state in expired:
-            _oauth_states.pop(state, None)
+        for item in expired:
+            _oauth_states.pop(item, None)
         if sum(record["principal"] == key[0] for record in _oauth_states.values()) >= 32:
             raise RuntimeError("Too many pending connections. Try again later.")
-        state = secrets.token_urlsafe(32)
         _oauth_states[state] = {
             "principal": key[0], "provider": provider, "session_id": session_id,
             "version": _oauth_versions.get(key, 0), "redirect_uri": redirect_uri,
-            "connection_epoch": usage_limits.store.connector_epoch(provider),
-            "verifier": verifier, "created_at": now,
-            "frontend_url": frontend_url or _frontend_url(),
+            "connection_epoch": epoch, "verifier": verifier, "created_at": now,
+            "frontend_url": frontend,
         }
     return state
 
 
 def _consume_state(state: str, provider: str, session_id: str) -> dict:
     key = _key(provider)
+    now = time.time()
+
+    if _postgres_enabled():
+        from postgres_db import postgres_connection
+
+        with postgres_connection() as db:
+            row = db.execute(
+                """
+                DELETE FROM oauth_states
+                WHERE state = ?
+                RETURNING principal,provider,session_id,version,redirect_uri,
+                          connection_epoch,verifier,created_at,expires_at,frontend_url
+                """,
+                (state,),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Invalid or expired OAuth state.")
+        record = dict(row)
+        epoch = usage_limits.store.connector_epoch(provider)
+        if (
+            not session_id
+            or record["session_id"] != session_id
+            or record["principal"] != key[0]
+            or record["provider"] != provider
+            or record["expires_at"] <= now
+            or record["connection_epoch"] != epoch
+            or record["version"] != epoch
+        ):
+            raise RuntimeError("Invalid or expired OAuth state.")
+        return record
+
     with _store_lock:
         record = _oauth_states.pop(state, None)
         if (not record or not session_id or record["session_id"] != session_id
@@ -170,7 +236,11 @@ def _save_token(
         raise RuntimeError(OAUTH_ERROR)
     expires_at = time.time() + float(expires_in) if isinstance(expires_in, (int, float)) else None
     with _store_lock:
-        if expected_version is not None and _oauth_versions.get(key, 0) != expected_version:
+        if (
+            not _postgres_enabled()
+            and expected_version is not None
+            and _oauth_versions.get(key, 0) != expected_version
+        ):
             raise RuntimeError(OAUTH_ERROR)
         epoch = usage_limits.store.connector_epoch(
             provider, advance=not refreshing, expected=expected_epoch,
@@ -232,9 +302,18 @@ def disconnect_oauth_provider(provider: str) -> None:
             pass
         _oauth_versions[key] = _oauth_versions.get(key, 0) + 1
         _oauth_tokens.pop(key, None)
-        for state, record in list(_oauth_states.items()):
-            if (record["principal"], record["provider"]) == key:
-                _oauth_states.pop(state, None)
+        if _postgres_enabled():
+            from postgres_db import postgres_connection
+
+            with postgres_connection() as db:
+                db.execute(
+                    "DELETE FROM oauth_states WHERE principal=? AND provider=?",
+                    key,
+                )
+        else:
+            for state, record in list(_oauth_states.items()):
+                if (record["principal"], record["provider"]) == key:
+                    _oauth_states.pop(state, None)
 
 
 def is_oauth_connected(provider: str) -> bool:
@@ -285,7 +364,10 @@ def start_slack_oauth(
 def _validate_completion(provider: str, record: dict, validate_session: Callable[[], bool]) -> None:
     if current_owner() != record["principal"] or not validate_session():
         raise RuntimeError("The initiating session has expired. Connect again.")
-    if _oauth_versions.get(_key(provider), 0) != record["version"]:
+    if (
+        not _postgres_enabled()
+        and _oauth_versions.get(_key(provider), 0) != record["version"]
+    ):
         raise RuntimeError(OAUTH_ERROR)
     usage_limits.store.connector_epoch(provider, expected=record["connection_epoch"])
 
