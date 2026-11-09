@@ -394,6 +394,9 @@ class AuthStore:
         finally:
             connection.close()
 
+    def _after_admin_created(self, connection) -> None:
+        """Backend hook for identity sequences; SQLite needs no adjustment."""
+
     def create_owner(self, username: str, password: str) -> None:
         """Create the initial administrator through the local bootstrap CLI."""
         validate_owner_credentials(username, password)
@@ -426,6 +429,7 @@ class AuthStore:
                 "INSERT INTO user_identity(user_id, principal_id) VALUES (1, ?)",
                 (principal,),
             )
+            self._after_admin_created(connection)
             connection.execute("DELETE FROM setup_tokens")
 
     def create_setup_token(self) -> str:
@@ -581,6 +585,7 @@ class AuthStore:
                 "INSERT INTO user_identity(user_id, principal_id) VALUES (1, ?)",
                 (principal,),
             )
+            self._after_admin_created(connection)
 
             # Consume both the setup token and the browser's pre-session.
             connection.execute("DELETE FROM setup_tokens")
@@ -965,10 +970,10 @@ class AuthStore:
             encoded = hash_password(password)
             cursor = connection.execute(
                 "INSERT INTO users(username,email,password_hash,role,created_at) "
-                "VALUES(?,?,?,'user',?)",
+                "VALUES(?,?,?,'user',?) RETURNING id",
                 (email, email, encoded, now),
             )
-            user_id = int(cursor.lastrowid)
+            user_id = int(cursor.fetchone()[0])
             connection.execute(
                 "INSERT INTO user_identity(user_id,principal_id) VALUES(?,?)",
                 (user_id, secrets.token_hex(32)),
