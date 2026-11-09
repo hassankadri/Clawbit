@@ -132,6 +132,17 @@ class PostgresConnection:
         return None
 
     def execute(self, sql: str, parameters: Any = ()) -> PostgresCursor:
+        # SQLite BEGIN IMMEDIATE serialized the complete write transaction.
+        # A normal PostgreSQL BEGIN would silently remove that guarantee and
+        # allow auth throttles, history receipts, and memory dedupe to race.
+        if sql.strip().rstrip(";").upper() == "BEGIN IMMEDIATE":
+            self._connection.execute("BEGIN")
+            return PostgresCursor(
+                self._connection.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    ("clawbit:sqlite-immediate-compat",),
+                )
+            )
         return PostgresCursor(self._connection.execute(translate_sql(sql), parameters))
 
     def executemany(self, sql: str, parameters: Any) -> PostgresCursor:
