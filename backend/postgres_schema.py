@@ -177,6 +177,34 @@ SCHEMA_STATEMENTS = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS usage (
+        principal TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        period BIGINT NOT NULL,
+        window BIGINT NOT NULL,
+        count BIGINT NOT NULL,
+        PRIMARY KEY (principal, operation, period, window)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS leases (
+        id TEXT PRIMARY KEY,
+        principal TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        expires_at DOUBLE PRECISION NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS leases_expiration ON leases(expires_at)",
+    "CREATE INDEX IF NOT EXISTS leases_operation ON leases(operation, expires_at)",
+    """
+    CREATE TABLE IF NOT EXISTS connector_epochs (
+        principal TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        generation BIGINT NOT NULL,
+        PRIMARY KEY (principal, provider)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS claims (
         claim_id TEXT PRIMARY KEY,
         principal_id TEXT NOT NULL,
