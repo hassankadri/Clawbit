@@ -6,8 +6,8 @@ import warnings
 
 from dotenv import load_dotenv
 
-from auth import auth_database_path
-from auth_store import AuthStore, OwnerSetupError
+from auth import create_auth_store
+from auth_store import OwnerSetupError
 
 
 def main() -> int:
@@ -16,11 +16,11 @@ def main() -> int:
     if len(sys.argv) != 1 or not sys.stdin.isatty():
         print("Run setup_owner.py interactively, without arguments.")
         return 1
-    store = AuthStore(auth_database_path())
+    store = create_auth_store()
     if store.has_owner():
         print("This installation already has an owner.")
         return 1
-    print("The sole owner will have access to this installation's existing local data.")
+    print("The initial administrator will own the resources created in this Clawbit installation.")
     try:
         if input("Type INITIALIZE to accept and continue: ") != "INITIALIZE":
             print("Setup canceled.")
