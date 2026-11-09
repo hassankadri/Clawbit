@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import time
 from ownership import current_owner, require_thread
 from postgres_db import postgres_connection
 
@@ -191,7 +192,7 @@ def create_upload_intent(
                 mime_type,
                 kind,
                 expected_size,
-                __import__("time").time(),
+                time.time(),
                 expires_at,
             ),
         )
@@ -243,7 +244,7 @@ def set_upload_intent_final_key(
             WHERE principal=? AND thread_id=? AND attachment_id=? AND expires_at>?
             RETURNING attachment_id
             """,
-            (final_key, principal, thread_id, attachment_id, __import__("time").time()),
+            (final_key, principal, thread_id, attachment_id, time.time()),
         ).fetchone()
 
     if row is None:
@@ -297,7 +298,7 @@ def commit_upload_intent(
             FROM upload_intents
             WHERE principal=? AND thread_id=? AND attachment_id=? AND expires_at>?
             """,
-            (principal, thread_id, attachment_id, __import__("time").time()),
+            (principal, thread_id, attachment_id, time.time()),
         ).fetchone()
         if (
             intent is None
@@ -344,7 +345,7 @@ def commit_upload_intent(
 
 def list_expired_upload_intents(limit: int = 100) -> list[dict]:
     principal = current_owner()
-    now = __import__("time").time()
+    now = time.time()
     safe_limit = max(1, min(int(limit), 100))
 
     with postgres_connection() as db:
@@ -378,7 +379,7 @@ def delete_upload_intent(
     params: tuple = (principal, thread_id, attachment_id)
     if expired_only:
         sql += " AND expires_at<=?"
-        params += (__import__("time").time(),)
+        params += (time.time(),)
 
     with postgres_connection() as db:
         row = db.execute(sql + " RETURNING attachment_id", params).fetchone()
