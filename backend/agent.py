@@ -169,23 +169,19 @@ BACKEND_DIR = (
 
 
 
+CHECKPOINT_BACKEND = os.getenv("CLAWBIT_CHECKPOINT_BACKEND", "sqlite").strip().lower()
+
 DATA_DIR = (
-
-    Path(os.getenv("CLAWBIT_RUNTIME_DIR", BACKEND_DIR))
-
-    / "data"
-
+    Path(os.getenv("CLAWBIT_TMP_DIR", "/tmp/clawbit-runtime")) / "data"
+    if CHECKPOINT_BACKEND == "postgres"
+    else Path(os.getenv("CLAWBIT_RUNTIME_DIR", BACKEND_DIR)) / "data"
 )
 
-
-
-DATA_DIR.mkdir(
-
-    parents=True,
-
-    exist_ok=True,
-
-)
+# SQLite is local-only. Never create files below Vercel's read-only source tree.
+if CHECKPOINT_BACKEND == "sqlite":
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+elif CHECKPOINT_BACKEND != "postgres":
+    raise RuntimeError("CLAWBIT_CHECKPOINT_BACKEND must be sqlite or postgres.")
 
 
 
