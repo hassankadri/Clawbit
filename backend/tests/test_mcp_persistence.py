@@ -233,3 +233,121 @@ def test_unsupported_credential_kind_is_rejected():
             {"access_token": "invalid-provider-combination"},
             epoch,
         )
+
+
+def test_postgres_oauth_reads_fresh_token_from_shared_store(monkeypatch):
+    """A warm function must not keep using a token rotated by another instance."""
+    monkeypatch.setattr(oauth, "_postgres_enabled", lambda: True)
+    monkeypatch.setattr(oauth, "_oauth_tokens", {
+        ("principal-fresh", "google-drive"): {
+            "access_token": "stale-access-token",
+            "refresh_token": "stale-refresh-token",
+            "expires_at": 0,
+            "connection_epoch": 7,
+        }
+    })
+    monkeypatch.setattr(vault, "load_record", lambda provider: {
+        "kind": "oauth",
+        "value": {
+            "access_token": "fresh-access-token",
+            "refresh_token": "fresh-refresh-token",
+            "expires_at": 9999999999,
+        },
+        "epoch": 7,
+    })
+    monkeypatch.setattr(
+        oauth.usage_limits.store,
+        "connector_epoch",
+        lambda provider: 7,
+    )
+
+    with owner_context("principal-fresh"):
+        record = oauth.get_oauth_token_record("google-drive")
+
+    assert record["access_token"] == "fresh-access-token"
+    assert record["refresh_token"] == "fresh-refresh-token"
+
+
+def test_postgres_google_refresh_uses_distributed_lease(monkeypatch):
+    monkeypatch.setattr(oauth, "_postgres_enabled", lambda: True)
+    old_record = {
+        "access_token": "expired-access-token",
+        "refresh_token": "current-refresh-token",
+        "expires_at": 1,
+        "connection_epoch": 5,
+    }
+    calls = {"acquire": 0, "release": [], "save": []}
+
+    class FakeUsageStore:
+        def acquire_connector_refresh(self, provider):
+            assert provider == "google-drive"
+            calls["acquire"] += 1
+            return "refresh-lease"
+
+        def release(self, lease):
+            calls["release"].append(lease)
+
+    async def refresh_request(url, data):
+        assert data["refresh_token"] == "current-refresh-token"
+        return {
+            "access_token": "rotated-access-token",
+            "refresh_token": "rotated-refresh-token",
+            "expires_in": 3600,
+        }
+
+    def save(provider, payload, **kwargs):
+        calls["save"].append((provider, payload, kwargs))
+
+    monkeypatch.setattr(oauth.usage_limits, "store", FakeUsageStore())
+    monkeypatch.setattr(oauth, "get_oauth_token_record", lambda provider: dict(old_record))
+    monkeypatch.setattr(oauth, "_post_form", refresh_request)
+    monkeypatch.setattr(oauth, "_require_env", lambda name: "configured-secret")
+    monkeypatch.setattr(oauth, "_save_token", save)
+
+    result = asyncio.run(oauth._get_google_drive_access_token_postgres())
+
+    assert result == "rotated-access-token"
+    assert calls["acquire"] == 1
+    assert calls["release"] == ["refresh-lease"]
+    assert calls["save"][0][0] == "google-drive"
+    assert calls["save"][0][2]["expected_epoch"] == 5
+    assert calls["save"][0][2]["refreshing"] is True
+
+
+def test_postgres_google_refresh_waits_for_other_instance(monkeypatch):
+    monkeypatch.setattr(oauth, "_postgres_enabled", lambda: True)
+    expired = {
+        "access_token": "old-access-token",
+        "refresh_token": "refresh-token",
+        "expires_at": 1,
+        "connection_epoch": 3,
+    }
+    fresh = {
+        "access_token": "other-instance-fresh-token",
+        "refresh_token": "rotated-refresh-token",
+        "expires_at": 9999999999,
+        "connection_epoch": 3,
+    }
+    states = iter([expired, fresh])
+    calls = {"acquire": 0}
+
+    class FakeUsageStore:
+        def acquire_connector_refresh(self, provider):
+            calls["acquire"] += 1
+            return None
+
+    async def no_wait(_seconds):
+        return None
+
+    async def unexpected_refresh(*args, **kwargs):
+        pytest.fail("The waiting function must reuse the token published by the lease owner.")
+
+    monkeypatch.setattr(oauth.usage_limits, "store", FakeUsageStore())
+    monkeypatch.setattr(oauth, "get_oauth_token_record", lambda provider: next(states))
+    monkeypatch.setattr(oauth.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(oauth, "_post_form", unexpected_refresh)
+
+    result = asyncio.run(oauth._get_google_drive_access_token_postgres())
+
+    assert result == "other-instance-fresh-token"
+    assert calls["acquire"] == 1
