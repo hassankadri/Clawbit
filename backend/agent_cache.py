@@ -12,6 +12,8 @@ from collections.abc import Awaitable, Callable, Hashable
 from pathlib import Path
 from threading import RLock
 from typing import Any, TypeVar
+import hashlib
+import os
 
 import aiosqlite
 
@@ -35,6 +37,9 @@ _checkpoint_builds: dict[
     tuple[int, str],
     Future[OwnedSqliteSaver],
 ] = {}
+
+_postgres_checkpoint_resources: dict[tuple[int, str], tuple[list[Any], Any, Any]] = {}
+_postgres_checkpoint_builds: dict[tuple[int, str], Future[Any]] = {}
 
 
 async def cached_agent(
@@ -101,12 +106,17 @@ async def cached_agent(
 async def get_checkpointer(
     path: str | Path,
     connections: list[Any],
-) -> OwnedSqliteSaver:
-    """Reuse a single checkpoint saver for each database and owner list.
+) -> Any:
+    """Reuse the selected durable checkpoint backend.
 
-    The same saver is shared by compiled graphs, ensuring its internal
-    SQLite coordination lock is also shared.
+    Local development defaults to SQLite. Vercel must explicitly set
+    CLAWBIT_CHECKPOINT_BACKEND=postgres and provide DATABASE_URL.
     """
+    backend = os.getenv("CLAWBIT_CHECKPOINT_BACKEND", "sqlite").strip().lower()
+    if backend == "postgres":
+        return await get_postgres_checkpointer(connections)
+    if backend != "sqlite":
+        raise RuntimeError("CLAWBIT_CHECKPOINT_BACKEND must be sqlite or postgres.")
     database = str(Path(path).resolve())
     resource_key = (id(connections), database)
 
@@ -165,6 +175,77 @@ async def get_checkpointer(
     return saver
 
 
+
+
+async def get_postgres_checkpointer(connections: list[Any]) -> Any:
+    """Create/reuse an async Neon pool. Schema setup is a separate operation."""
+    dsn = os.getenv("DATABASE_URL", "").strip()
+    if not dsn:
+        raise RuntimeError(
+            "DATABASE_URL is required when CLAWBIT_CHECKPOINT_BACKEND=postgres."
+        )
+    if not dsn.startswith(("postgres://", "postgresql://")):
+        raise RuntimeError("DATABASE_URL must be a PostgreSQL URL.")
+
+    os.environ["LANGGRAPH_STRICT_MSGPACK"] = "true"
+
+    from psycopg.rows import dict_row
+    from psycopg_pool import AsyncConnectionPool
+    from owned_postgres_checkpoints import OwnedPostgresSaver
+
+    key = (id(connections), hashlib.sha256(dsn.encode("utf-8")).hexdigest())
+    with _guard:
+        resource = _postgres_checkpoint_resources.get(key)
+        if resource is not None:
+            return resource[1]
+        pending = _postgres_checkpoint_builds.get(key)
+        if pending is None:
+            pending = Future()
+            _postgres_checkpoint_builds[key] = pending
+            is_builder = True
+        else:
+            is_builder = False
+
+    if not is_builder:
+        return await asyncio.shield(asyncio.wrap_future(pending))
+
+    pool = None
+    try:
+        pool = AsyncConnectionPool(
+            conninfo=dsn,
+            min_size=1,
+            max_size=3,
+            open=False,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": dict_row,
+            },
+        )
+        await pool.open(wait=True, timeout=15)
+        saver = OwnedPostgresSaver(pool)
+    except BaseException as exc:
+        if pool is not None:
+            try:
+                await pool.close()
+            except Exception:
+                pass
+        with _guard:
+            _postgres_checkpoint_builds.pop(key, None)
+            if isinstance(exc, asyncio.CancelledError):
+                pending.cancel()
+            else:
+                pending.set_exception(exc)
+        raise
+
+    with _guard:
+        connections.append(pool)
+        _postgres_checkpoint_resources[key] = (connections, saver, pool)
+        _postgres_checkpoint_builds.pop(key, None)
+        pending.set_result(saver)
+    return saver
+
+
 async def close_checkpointers(
     connections: list[Any],
 ) -> None:
@@ -176,6 +257,9 @@ async def close_checkpointers(
     with _guard:
         resources = list(_checkpoint_resources.values())
         _checkpoint_resources.clear()
+        postgres_resources = list(_postgres_checkpoint_resources.values())
+        _postgres_checkpoint_resources.clear()
+        _postgres_checkpoint_builds.clear()
 
         to_close: list[Any] = []
         seen: set[int] = set()
@@ -185,7 +269,7 @@ async def close_checkpointers(
                 seen.add(id(connection))
                 to_close.append(connection)
 
-        for owner_list, _, connection in resources:
+        for owner_list, _, connection in resources + postgres_resources:
             collect(connection)
 
             owner_list[:] = [
