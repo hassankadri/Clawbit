@@ -129,7 +129,7 @@ References:
 ## 8. Open decisions before the first live Preview
 
 - **Vercel Hobby (Free) confirmed.** This deployment must remain personal/non-commercial. No paid services or automatic overages.
-- Choose one Neon region and place Vercel Functions nearby where Hobby allows it; verify account-available regions before provisioning. Use Cloudflare R2 Standard private bucket for uploads.
+- Use Neon Postgres and Neon Object Storage in AWS Asia Pacific (Singapore, `aws-ap-southeast-1`), which is listed as a supported Object Storage region. Set the Vercel backend project to the single Hobby function region `sin1` (Singapore) using `backend/vercel.json`; verify both services show the same region before provisioning.
 - **Full reset authorized:** permanently erase the existing local runtime data and provision a brand-new hosted installation with new identities and IDs.
 - Which OAuth/MCP integrations must be available in the first hosted release.
 
@@ -211,7 +211,7 @@ The following work is mandatory before a usable Preview; the Next.js rewrite cha
 9. Add a durable async-job path for workflows that may exceed the 120-second external-rewrite timeout. Keep proxied SSE responses bounded; test browser aborts, client reconnects and function timeouts.
 10. Deploy only after backend unit/integration tests pass against a clean Neon branch and an isolated private object-storage bucket. Verify startup/login, user isolation, history, checkpoints, new uploads, RAG indexing/retrieval/deletion, OAuth state and cold-start durability.
 
-**Free quota facts checked 2026-11-09:** Vercel Hobby includes 1 million Function invocations, 100 GB-hours Function Duration, 4 CPU-hours and 360 GB-hours provisioned memory/month; Hobby is personal/non-commercial only. Neon Free currently includes 100 CU-hours/project/month, 1 GB Postgres storage/project, 5 GB public network transfer/project/month, and the Neon Free backend announcement lists 5 GB object storage/project. Compute scales to zero after 5 minutes idle; when compute or transfer quotas are exhausted, connections may be suspended until the quota resets. Do not assume unlimited availability. Confirm the live account quota and current object-storage pricing/limits before provisioning. Set alerts; do not enable paid add-ons or usage-based paid compute.
+**Free quota facts checked 2026-11-09:** Vercel Hobby includes 1 million Function invocations, 100 GB-hours Function Duration, 4 CPU-hours and 360 GB-hours provisioned memory/month; Hobby is personal/non-commercial only. Neon Free currently includes 100 CU-hours/project/month, 1 GB Postgres storage/project, 5 GB public network transfer/project/month, and the Neon Free backend announcement lists 5 GB object storage/project. Compute scales to zero after 5 minutes idle; when compute or transfer quotas are exhausted, connections may be suspended until the quota resets. Do not assume unlimited availability. Confirm the live account quota and current object-storage pricing/limits before provisioning. Set alerts; do not enable paid add-ons or usage-based paid compute. This is infrastructure-only cost guidance: calls to Gemini, Groq, OpenRouter, Tavily or other external model/search APIs have separate provider quotas and may cost money. Keep the selected providers on their free allowance or use local/offline functionality; do not assume Vercel/Neon quotas include model tokens.
 
 ## References
 
