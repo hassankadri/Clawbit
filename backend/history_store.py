@@ -174,7 +174,7 @@ class HistoryStore:
     @staticmethod
     def _row(db: sqlite3.Connection, thread_id: str) -> sqlite3.Row:
         row = db.execute(
-            "SELECT * FROM history_conversations WHERE thread_id=? AND deleted=0", (thread_id,)
+            "SELECT * FROM history_conversations WHERE thread_id=? AND deleted=FALSE", (thread_id,)
         ).fetchone()
         if row is None:
             raise OwnershipError()
@@ -235,7 +235,7 @@ class HistoryStore:
                 SELECT c.*, r.messages AS active_messages
                 FROM history_conversations c
                 LEFT JOIN history_revisions r ON r.id=c.active_revision
-                WHERE c.deleted=0
+                WHERE c.deleted=FALSE
                 ORDER BY c.pinned DESC, c.updated_at DESC, c.thread_id
             """)
             result = []
@@ -257,7 +257,7 @@ class HistoryStore:
         owned = set(ownership.store.owned_ids("thread"))
         with self.connection() as db:
             rows = db.execute(
-                "SELECT thread_id FROM history_conversations WHERE deleted=1"
+                "SELECT thread_id FROM history_conversations WHERE deleted=TRUE"
             )
             return [row[0] for row in rows if row[0] in owned]
 
