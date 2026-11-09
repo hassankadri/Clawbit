@@ -390,7 +390,7 @@ test("uploads send credentials and CSRF; expired sessions reject further uploads
     /Sign in/,
   );
 
-  assert.equal(requests[1].body, undefined);
+  assert.equal(requests.length, 1, "expired sessions must not create or send another upload request");
 });
 
 test("logout or expiry aborts an SSE request after response headers arrive", async () => {
