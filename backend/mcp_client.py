@@ -5,6 +5,7 @@ import asyncio
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 import re
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -205,7 +206,7 @@ def _stdio_connection(
     token: str,
 ) -> dict:
     """Construct an stdio server using an approved, pinned package."""
-    if __import__("os").getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
+    if os.getenv("CLAWBIT_PERSISTENCE_BACKEND", "sqlite").strip().lower() == "postgres":
         raise ValueError(
             "This connector requires a local stdio process and is disabled in "
             "the Vercel serverless deployment."
@@ -791,7 +792,10 @@ async def _connect_token(
         config = builders[server_id](
             token.strip()
         )
-    except ValueError:
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith("This connector requires a local stdio process"):
+            return {"success": False, "error": message}
         return {
             "success": False,
             "error": "Invalid connector credential format.",
