@@ -15,8 +15,8 @@ class FakeS3:
         self.gets = []
 
     def put_object(self, **kwargs):
+        kwargs["Body"] = kwargs["Body"].read()
         self.puts.append(kwargs)
-
     def get_object(self, **kwargs):
         self.gets.append(kwargs)
         return {"Body": io.BytesIO(self.payload), "ContentLength": len(self.payload)}
@@ -64,7 +64,7 @@ def test_put_file_sends_private_bucket_key_and_content_type(monkeypatch, tmp_pat
     assert request["Bucket"] == "clawbit-private"
     assert request["Key"] == "uploads/random-key.pdf"
     assert request["ContentType"] == "application/pdf"
-    assert request["Body"].read() == b"pdf-data"
+    assert request["Body"] == b"pdf-data"
 
 
 def test_get_bytes_enforces_declared_and_actual_limits(monkeypatch, tmp_path):
