@@ -15,10 +15,6 @@ from typing import Any, TypeVar
 import hashlib
 import os
 
-import aiosqlite
-
-from owned_checkpoints import OwnedSqliteSaver
-
 
 T = TypeVar("T")
 
@@ -30,12 +26,12 @@ _agent_builds: dict[tuple[int, Hashable], Future[Any]] = {}
 
 _checkpoint_resources: dict[
     tuple[int, str],
-    tuple[list[Any], OwnedSqliteSaver, aiosqlite.Connection],
+    tuple[list[Any], Any, Any],
 ] = {}
 
 _checkpoint_builds: dict[
     tuple[int, str],
-    Future[OwnedSqliteSaver],
+    Future[Any],
 ] = {}
 
 _postgres_checkpoint_resources: dict[tuple[int, str], tuple[list[Any], Any, Any]] = {}
@@ -139,6 +135,11 @@ async def get_checkpointer(
         return await asyncio.shield(
             asyncio.wrap_future(pending)
         )
+
+    # The SQLite implementation is loaded only for local development.
+    # Vercel's production dependency set intentionally excludes these packages.
+    import aiosqlite
+    from owned_checkpoints import OwnedSqliteSaver
 
     connection = None
 
