@@ -1,10 +1,10 @@
 # Clawbit Vercel Deployment Plan
 
-**Status:** compatibility inventory complete; implementation not started  
+**Status:** clean-slate reset selected; deployment implementation not started  
 **Baseline:** `eb1428b50f901a8fc67782e34225e8c230f4ea87`  
 **Working branch:** `deployment/vercel-migration`
 
-This plan is intentionally separate from the pre-deployment audit branch. No production deployment, local database, uploaded file, or credential has been modified.
+This plan is intentionally separate from the pre-deployment audit branch. **Decision (2026-11-09): permanently erase the existing local runtime data and start from a clean installation with new identities and IDs.** This includes local accounts, sessions, histories, memories, checkpoints, ownership records, usage state, backups, uploads and Chroma vectors. Source code, project files, `.env` configuration and dependencies are not part of the data wipe. No local files have yet been deleted by ChatGPT.
 
 ## 1. Recommended Vercel layout
 
@@ -61,15 +61,19 @@ Do not treat Vercel Function `/tmp` as durable storage. It is scratch space only
 - `usage_limits.py` assumes a stable local process identity for leases. That assumption is not valid for independently invoked serverless functions.
 - `mcp_client.py` launches Notion/Stripe MCP servers through `npx -y`. Do not assume the Vercel Python runtime has a suitable Node/npm binary or that stdio child processes survive between invocations. Move these connectors to supported remote HTTP MCP endpoints or a separately hosted MCP runtime after verifying provider support.
 
-## 5. Safe migration rules
+## 5. Clean-slate reset decision
 
-1. Keep the local Windows installation untouched and usable.
-2. Back up each SQLite database and the uploads/Chroma directories before any export. For SQLite databases using WAL mode, use SQLite's online backup API (or stop the application and perform a verified checkpoint/backup); never copy only the main `.sqlite`/`.db` file while committed data may remain in `-wal`. Treat `-shm` as transient coordination state, not as a database backup.
-3. Build an idempotent, dry-run-first migration tool; never make deployment startup migrate or reset user data.
-4. Preserve user IDs/principal IDs, thread/workspace ownership, attachment IDs, history revisions, memory versions, and connector epochs.
-5. Do not transfer plaintext secrets through logs, chat, source control, or migration reports.
-6. Test import into an empty Preview database first. Verify counts, ownership checks, retrieval, and downloads before migrating any real user data.
-7. Keep the local source and backups until an independently verified restore has succeeded.
+The user explicitly authorized permanent deletion of the existing runtime data and a complete fresh start. This replaces the earlier migration strategy.
+
+- Delete local runtime data only from the confirmed project paths: `backend/data/`, `backend/uploads/`, `backend/chroma_db/`, root `uploads/`, and root `chroma_db/`. This removes local SQLite databases, checkpoint WAL/SHM files, ownership-backup snapshots, manifests, attachment files and embedded Chroma vectors.
+- Do not delete source code, frontend/backend project files, Git history, dependencies, `.env` configuration or unrelated folders.
+- Do not create a backup of the data being intentionally erased. This is a permanent reset decision; the user has accepted losing the old local data.
+- Do not import any old local IDs, accounts, password hashes, principal IDs, threads, workspaces, checkpoints, memories, upload metadata, files, vectors or connector secrets into Vercel.
+- Provision new empty cloud database and private object storage; create a new administrator identity during fresh setup. Allow the application to generate new user/principal/workspace/thread/attachment IDs. Never synthesize IDs by editing database files manually.
+- Fresh-start verification must prove all old runtime stores are absent before initializing new local state and that all cloud state starts empty before first signup/setup.
+- Do not run deletion automatically on application startup or as part of Vercel build/deployment. Local deletion is a one-time, explicit operator action against the verified Windows project root.
+- Existing `.env` values are configuration/secrets, not user data; retain them until new hosted environment variables are configured and verified. Rotate any credentials that may have been exposed or are no longer wanted.
+
 
 ## 6. Implementation sequence
 
@@ -80,7 +84,7 @@ Do not treat Vercel Function `/tmp` as durable storage. It is scratch space only
 5. Move OAuth/approval state to shared storage and resolve MCP stdio execution.
 6. Add Vercel project configuration, same-origin API rewrite, security headers and environment documentation.
 7. Deploy Preview, run automated tests, and verify login, chat SSE, upload, retrieval, delete, OAuth and MCP flows.
-8. Migrate data only with explicit approval and a tested rollback/restore path.
+8. Start with empty managed storage and verify new identity/resource IDs. No legacy-data migration.
 
 ## 7. Vercel Hobby constraints and data-handling gate
 
@@ -117,7 +121,7 @@ References:
 
 - **Vercel plan confirmed: Hobby (Free).** Treat the hosted app as a personal/non-commercial deployment; upgrade before commercial use.
 - Confirm the storage provider/region and align the Vercel Function region with the database/object-store region. Neon lists Singapore (`ap-southeast-1`) as an available region; Vercel supports `sin1`. Validate current account availability before setting it.
-- Existing local installation migration is required; a fresh hosted account is not acceptable. Keep original local files and data untouched.
+- **Full reset authorized:** permanently erase the existing local runtime data and provision a brand-new hosted installation with new identities and IDs.
 - Which OAuth/MCP integrations must be available in the first hosted release.
 
 ## 9. Local migration inventory baseline (2026-11-09)
@@ -168,6 +172,20 @@ A read-only content/ownership inventory reported:
 - No user-owned uploads or vectors were reported by this scan.
 
 **Migration gate:** Do not migrate or discard any of the five missing-file records, the invalid record, or five unreferenced files until a second read-only diagnostic classifies the exact failure modes and checks each file against its manifest and Chroma attachment metadata. Preserve original folders and Chroma DB. The 35 vectors should be reindexed/compared after import, not treated as proven equivalent solely because thread metadata exists.
+
+## 11. Fresh-reset inventory and acceptance criteria
+
+The local inspection baseline is retained only as a record of what the reset removes; none of those records or files should be imported. The local cleanup targets must be exactly:
+
+1. `backend/data/` (all SQLite files, WAL/SHM files, and ownership-backup snapshots)
+2. `backend/uploads/`
+3. `backend/chroma_db/`
+4. root `uploads/`
+5. root `chroma_db/`
+
+After the user runs the one-time Windows cleanup, confirm these paths are absent/empty before starting the local app. The application may then recreate empty runtime stores and generate new IDs. The hosted Preview must independently start with empty managed services and a separately generated administrator identity.
+
+Do not delete any code, project configuration, Git history, virtual environment, node_modules, frontend build output, or `.env` as part of the data reset. Do not add any automatic reset command to deploy/build/startup.
 
 ## References
 
