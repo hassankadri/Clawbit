@@ -5,6 +5,7 @@ from contextlib import contextmanager
 import pytest
 
 from ownership import OwnershipError, owner_context
+from postgres_db import HybridRow
 import postgres_ownership
 
 
@@ -36,7 +37,7 @@ class FakeConnection:
             kind, resource_id = params
             principal = self.registry.get((kind, resource_id))
             return FakeCursor(
-                None if principal is None else {"principal_id": principal}
+                None if principal is None else HybridRow({"principal_id": principal})
             )
 
         if compact.startswith("SELECT RESOURCE_ID FROM RESOURCES"):
@@ -46,7 +47,7 @@ class FakeConnection:
                 for (resource_kind, resource_id), owner in self.registry.items()
                 if resource_kind == kind and owner == principal
             ]
-            return FakeCursor(rows=rows)
+            return FakeCursor(rows=[HybridRow(row) for row in rows])
 
         if compact.startswith("SELECT TO_REGCLASS"):
             return FakeCursor(row={
