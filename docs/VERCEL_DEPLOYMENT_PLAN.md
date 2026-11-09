@@ -138,7 +138,19 @@ The auth inventory reports two user accounts; preserve both users, roles, numeri
 
 Legacy memory behavior must be preserved: four `long_term_memory` rows have no `memory_details` / `memory_audit` rows, and the current reader applies legacy defaults (`scope=workspace`, `version=0`, `deleted=0`). Do not fabricate historical audit entries.
 
-All 107 ownership resources are assigned, but the single recorded legacy claim covers 93 resources. Before migration sign-off, compare the current ownership registry against `claim_resources`, map each assigned principal to an account role without exposing identifiers, and confirm the 14-resource difference is legitimate. Do not reassign any resource as part of this inspection.
+The ownership reconciliation was completed using a read-only comparison between `auth.sqlite3` and `ownership.sqlite3`:
+
+| Account role | Resource kind | Current total | Covered by original claim | Outside original claim |
+| --- | --- | ---: | ---: | ---: |
+| Admin | Threads | 93 | 89 | 4 |
+| Admin | Workspaces | 8 | 4 | 4 |
+| User | Threads | 3 | 0 | 3 |
+| User | Workspaces | 3 | 0 | 3 |
+| **Total** | | **107** | **93** | **14** |
+
+All 107 resources map to one of the two existing account principal identities; there are no unassigned or unmapped resources in this snapshot. The 14 resources outside the original claim are currently assigned (8 admin, 6 user), consistent with resources created after the historical claim. The one legacy owner identity matches the admin user's principal identity. All 7 visible conversations and the 1 listed workspace map to an existing account; 0 conversation revisions are orphaned. No records were modified during these inspections.
+
+This is a successful ownership baseline, not proof that every attachment/vector record is correctly linked. Before migration sign-off, reconcile per-account conversation, workspace, memory, upload and Chroma metadata counts. Preserve both users and their distinct principals; do not collapse the regular user into the admin. Do not reassign any resource as part of migration.
 
 The checkpoint database uses WAL mode. A migration backup must use SQLite's online backup API or a controlled application stop and verified checkpoint. Never copy only the main database file while committed transactions may remain in the WAL. The SHM file is transient coordination state, not an authoritative backup input.
 
